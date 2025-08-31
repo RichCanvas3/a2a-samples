@@ -116,15 +116,9 @@ def main(
     log_level: str = DEFAULT_LOG_LEVEL,
 ):
     """Command Line Interface to start the Airbnb Agent server."""
-    # Verify an API key is set.
-    # Not required if using Vertex AI APIs.
-    if os.getenv('GOOGLE_GENAI_USE_VERTEXAI') != 'TRUE' and not os.getenv(
-        'GOOGLE_API_KEY'
-    ):
-        raise ValueError(
-            'GOOGLE_API_KEY environment variable not set and '
-            'GOOGLE_GENAI_USE_VERTEXAI is not TRUE.'
-        )
+    # Verify OpenAI API key is set.
+    if not os.getenv('OPENAI_API_KEY'):
+        raise ValueError('OPENAI_API_KEY environment variable not set.')
 
     async def run_server_async():
         async with app_lifespan(app_context):

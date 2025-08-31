@@ -12,8 +12,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.runnables.config import (
     RunnableConfig,
 )
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_vertexai import ChatVertexAI
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
@@ -54,27 +53,14 @@ class AirbnbAgent:
         """
         logger.info('Initializing AirbnbAgent with preloaded MCP tools...')
         try:
-            model = os.getenv('GOOGLE_GENAI_MODEL')
-            if not model:
-                raise ValueError(
-                    'GOOGLE_GENAI_MODEL environment variable is not set'
-                )
-
-            if os.getenv('GOOGLE_GENAI_USE_VERTEXAI') == 'TRUE':
-                # If not using Vertex AI, initialize with Google Generative AI
-                logger.info('ChatVertexAI model initialized successfully.')
-                self.model = ChatVertexAI(model=model)
-
-            else:
-                # Using the model name from your provided file
-                self.model = ChatGoogleGenerativeAI(model=model)
-                logger.info(
-                    'ChatGoogleGenerativeAI model initialized successfully.'
-                )
-
+            model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+            if not os.getenv('OPENAI_API_KEY'):
+                raise ValueError('OPENAI_API_KEY environment variable is not set')
+            self.model = ChatOpenAI(model=model)
+            logger.info('ChatOpenAI model initialized successfully.')
         except Exception as e:
             logger.error(
-                f'Failed to initialize ChatGoogleGenerativeAI model: {e}',
+                f'Failed to initialize ChatOpenAI model: {e}',
                 exc_info=True,
             )
             raise

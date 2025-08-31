@@ -2,7 +2,9 @@
 
 ## Getting started
 
-1. Create a `.env` file using the `example.env` file as a template.
+1. Create a `.env` file with:
+   - `OPENAI_API_KEY` (required)
+   - `OPENAI_MODEL` (optional, defaults to `gpt-4o-mini`)
 
 2. Start the server
 
