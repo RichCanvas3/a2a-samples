@@ -9,7 +9,11 @@
 2. Start the server
 
     ```bash
-    uv run .
+    # Finder variant (search)
+    uv run . -- --port 10002 --variant finder
+
+    # Reserve variant
+    uv run . -- --port 10012 --variant reserve
     ```
 
 ## Disclaimer

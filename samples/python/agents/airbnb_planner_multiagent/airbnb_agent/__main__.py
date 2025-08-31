@@ -26,6 +26,10 @@ from airbnb_agent import (
 )
 from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 
 
 load_dotenv(override=True)
@@ -114,6 +118,7 @@ def main(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     log_level: str = DEFAULT_LOG_LEVEL,
+    variant: str = 'finder',
 ):
     """Command Line Interface to start the Airbnb Agent server."""
     # Verify OpenAI API key is set.
@@ -129,27 +134,72 @@ def main(
                 )
                 # Depending on requirements, you could sys.exit(1) here
 
-            # Initialize AirbnbAgentExecutor with preloaded tools
-            airbnb_agent_executor = AirbnbAgentExecutor(
-                mcp_tools=app_context.get('mcp_tools', [])
+            # Build two inner apps (finder/reserve) and dispatch by Host header
+            airbnb_agent_executor_finder = AirbnbAgentExecutor(
+                mcp_tools=app_context.get('mcp_tools', []), variant='finder'
+            )
+            airbnb_agent_executor_reserve = AirbnbAgentExecutor(
+                mcp_tools=app_context.get('mcp_tools', []), variant='reserve'
             )
 
-            request_handler = DefaultRequestHandler(
-                agent_executor=airbnb_agent_executor,
+            request_handler_finder = DefaultRequestHandler(
+                agent_executor=airbnb_agent_executor_finder,
+                task_store=InMemoryTaskStore(),
+            )
+            request_handler_reserve = DefaultRequestHandler(
+                agent_executor=airbnb_agent_executor_reserve,
                 task_store=InMemoryTaskStore(),
             )
 
-            # Create the A2AServer instance
-            a2a_server = A2AStarletteApplication(
-                agent_card=get_agent_card(host, port),
-                http_handler=request_handler,
+            a2a_server_finder = A2AStarletteApplication(
+                agent_card=get_agent_card(host, port, 'finder'),
+                http_handler=request_handler_finder,
+            )
+            a2a_server_reserve = A2AStarletteApplication(
+                agent_card=get_agent_card(host, port, 'reserve'),
+                http_handler=request_handler_reserve,
             )
 
-            # Get the ASGI app from the A2AServer instance
-            asgi_app = a2a_server.build()
+            inner_finder = a2a_server_finder.build()
+            inner_reserve = a2a_server_reserve.build()
+
+            async def app(scope, receive, send):
+                if scope.get('type') != 'http':
+                    return await inner_finder(scope, receive, send)
+                headers = {k.decode().lower(): v.decode() for k, v in scope.get('headers', [])}
+                host_header = headers.get('host', '')
+                # Parse host without port
+                host_only = host_header.split(':', 1)[0].lower()
+                path = scope.get('path', '/')
+                # Support prefixed agent-card paths to avoid DNS dependencies
+                if path in ('/.well-known/agent-card.json', '/finder/.well-known/agent-card.json', '/reserve/.well-known/agent-card.json'):
+                    # Compute card dynamically based on Host
+                    server = scope.get('server') or (host_only, port)
+                    req_port = server[1] if isinstance(server, (list, tuple)) and len(server) > 1 else port
+                    if path.startswith('/reserve/'):
+                        inferred_variant = 'reserve'
+                    elif path.startswith('/finder/'):
+                        inferred_variant = 'finder'
+                    else:
+                        inferred_variant = 'reserve' if host_only.startswith('reserve.') else 'finder'
+                    card = get_agent_card(host_only, req_port, inferred_variant)
+                    response = JSONResponse(card.model_dump(exclude_none=True))
+                    return await response(scope, receive, send)
+                # Route all other requests to the appropriate inner app
+                if path.startswith('/reserve'):
+                    # strip prefix for inner app
+                    scope2 = dict(scope)
+                    scope2['path'] = path[len('/reserve'):] or '/'
+                    return await inner_reserve(scope2, receive, send)
+                if path.startswith('/finder'):
+                    scope2 = dict(scope)
+                    scope2['path'] = path[len('/finder'):] or '/'
+                    return await inner_finder(scope2, receive, send)
+                target = inner_reserve if host_only.startswith('reserve.') else inner_finder
+                return await target(scope, receive, send)
 
             config = uvicorn.Config(
-                app=asgi_app,
+                app=app,
                 host=host,
                 port=port,
                 log_level=log_level.lower(),
@@ -159,7 +209,7 @@ def main(
             uvicorn_server = uvicorn.Server(config)
 
             print(
-                f'Starting Uvicorn server at http://{host}:{port} with log-level {log_level}...'
+                f'Starting Uvicorn server at http://{host}:{port} [{variant}] with log-level {log_level}...'
             )
             try:
                 await uvicorn_server.serve()
@@ -185,23 +235,34 @@ def main(
         sys.exit(1)
 
 
-def get_agent_card(host: str, port: int):
+def get_agent_card(host: str, port: int, variant: str):
     """Returns the Agent Card for the Currency Agent."""
     capabilities = AgentCapabilities(streaming=True, push_notifications=True)
-    skill = AgentSkill(
-        id='airbnb_search',
-        name='Search airbnb accommodation',
-        description='Helps with accommodation search using airbnb',
-        tags=['airbnb accommodation'],
-        examples=[
-            'Please find a room in LA, CA, April 15, 2025, checkout date is april 18, 2 adults'
-        ],
-    )
+    if variant == 'reserve':
+        skill = AgentSkill(
+            id='reserve',
+            name='Reserve accommodation',
+            description='Assists with reserving an Airbnb listing',
+            tags=['airbnb reserve'],
+            examples=['Reserve this listing for 2 adults from 15 Apr to 18 Apr'],
+        )
+        agent_name = 'Airbnb Agent - Reserve'
+        agent_desc = 'Helps with reserving accommodation'
+    else:
+        skill = AgentSkill(
+            id='finder',
+            name='Find accommodation',
+            description='Helps with searching Airbnb listings',
+            tags=['airbnb search'],
+            examples=['Find a room in LA, CA, Apr 15–18, 2 adults'],
+        )
+        agent_name = 'Airbnb Agent - Finder'
+        agent_desc = 'Helps with searching accommodation'
     app_url = os.environ.get('APP_URL', f'http://{host}:{port}')
 
     return AgentCard(
-        name='Airbnb Agent',
-        description='Helps with searching accommodation',
+        name=agent_name,
+        description=agent_desc,
         url=app_url,
         version='1.0.0',
         default_input_modes=AirbnbAgent.SUPPORTED_CONTENT_TYPES,
@@ -231,8 +292,15 @@ def get_agent_card(host: str, port: int):
     default=DEFAULT_LOG_LEVEL,
     help='Uvicorn log level.',
 )
-def cli(host: str, port: int, log_level: str):
-    main(host, port, log_level)
+@click.option(
+    '--variant',
+    'variant',
+    type=click.Choice(['finder', 'reserve']),
+    default='finder',
+    help='Agent variant to run at this endpoint.',
+)
+def cli(host: str, port: int, log_level: str, variant: str):
+    main(host, port, log_level, variant)
 
 
 if __name__ == '__main__':

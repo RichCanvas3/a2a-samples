@@ -70,11 +70,14 @@ class RoutingAgent:
         self.remote_agent_connections: dict[str, RemoteAgentConnections] = {}
         self.cards: dict[str, AgentCard] = {}
         self.agents: str = ''
+        self.remote_agent_addresses: list[str] = []
 
     async def _async_init_components(
         self, remote_agent_addresses: list[str]
     ) -> None:
         """Asynchronous part of initialization."""
+        # Persist the configured addresses for lazy refresh
+        self.remote_agent_addresses = list(remote_agent_addresses)
         # Use a single httpx.AsyncClient for all card resolutions for efficiency
         async with httpx.AsyncClient(timeout=30) as client:
             for address in remote_agent_addresses:
@@ -106,6 +109,28 @@ class RoutingAgent:
             agent_info.append(json.dumps(agent_detail_dict))
         self.agents = '\n'.join(agent_info)
 
+    async def _refresh_cards_if_needed(self) -> None:
+        """Attempt to refresh remote agent cards if none are loaded."""
+        if self.remote_agent_connections:
+            return
+        if not self.remote_agent_addresses:
+            return
+        async with httpx.AsyncClient(timeout=30) as client:
+            for address in self.remote_agent_addresses:
+                try:
+                    card = await A2ACardResolver(client, address).get_agent_card()
+                    self.remote_agent_connections[card.name] = RemoteAgentConnections(
+                        agent_card=card, agent_url=address
+                    )
+                    self.cards[card.name] = card
+                except Exception:
+                    continue
+        # Rebuild agents string
+        agent_info = []
+        for agent_detail_dict in self.list_remote_agents():
+            agent_info.append(json.dumps(agent_detail_dict))
+        self.agents = '\n'.join(agent_info)
+
     @classmethod
     async def create(
         cls,
@@ -125,9 +150,17 @@ class RoutingAgent:
 
     def _build_system_prompt(self, state: Dict[str, Any]) -> str:
         current_active = self._get_active_agent_name(state)
+        # Present exact agent names to minimize LLM drift
+        available_names = list(self.remote_agent_connections.keys())
+        # Build a fresh summary of available agents from current cards
+        available_agents_summary = [
+            {'name': c.name, 'description': c.description}
+            for c in self.cards.values()
+        ]
         return (
             f"{SYSTEM_PROMPT}\n\n"
-            f"Available Agents: {self.agents}\n"
+            f"Available Agents: {available_agents_summary}\n"
+            f"Agent Names (use exactly one of these in agent_name): {available_names}\n"
             f"Currently Active Seller Agent: {current_active}"
         )
 
@@ -144,6 +177,40 @@ class RoutingAgent:
         if not state.get('session_active'):
             state['session_id'] = state.get('session_id') or str(uuid.uuid4())
             state['session_active'] = True
+
+    def _resolve_agent_name(self, requested: str) -> str | None:
+        """Resolve a requested agent name to a known remote agent name.
+
+        Tries exact match, case-insensitive match, simple aliases.
+        """
+        if not requested:
+            return None
+        names = list(self.remote_agent_connections.keys())
+        # Exact
+        if requested in self.remote_agent_connections:
+            return requested
+        # Case-insensitive exact
+        for n in names:
+            if n.lower() == requested.lower():
+                return n
+        # Simple aliases
+        alias_map = {
+            'seller agent': 'Airbnb Agent - Finder',
+            'finder': 'Airbnb Agent - Finder',
+            'search agent': 'Airbnb Agent - Finder',
+            'reserve': 'Airbnb Agent - Reserve',
+            'reservation agent': 'Airbnb Agent - Reserve',
+            'booking agent': 'Airbnb Agent - Reserve',
+            'weather': 'Weather Agent',
+        }
+        normalized = requested.lower().strip()
+        if normalized in alias_map and alias_map[normalized] in self.remote_agent_connections:
+            return alias_map[normalized]
+        # Substring heuristic
+        for n in names:
+            if normalized in n.lower() or n.lower() in normalized:
+                return n
+        return None
 
     def list_remote_agents(self):
         """List the available remote agents you can use to delegate the task."""
@@ -173,10 +240,11 @@ class RoutingAgent:
         Yields:
             A dictionary of JSON data.
         """
-        if agent_name not in self.remote_agent_connections:
+        resolved_name = self._resolve_agent_name(agent_name)
+        if not resolved_name:
             raise ValueError(f'Agent {agent_name} not found')
-        state['active_agent'] = agent_name
-        client = self.remote_agent_connections[agent_name]
+        state['active_agent'] = resolved_name
+        client = self.remote_agent_connections[resolved_name]
 
         if not client:
             raise ValueError(f'Client not available for {agent_name}')
@@ -258,10 +326,12 @@ class RoutingAgent:
         Yields structured dict events: {type: 'tool_call'|'tool_response'|'final', name?, content}
         """
         self.ensure_session_state(state)
+        await self._refresh_cards_if_needed()
 
         client = self._openai_client()
         model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
 
+        allowed_agents = list(self.remote_agent_connections.keys())
         tools: List[Dict[str, Any]] = [
             {
                 'type': 'function',
@@ -271,7 +341,11 @@ class RoutingAgent:
                     'parameters': {
                         'type': 'object',
                         'properties': {
-                            'agent_name': {'type': 'string', 'description': 'Name of the remote agent'},
+                            'agent_name': {
+                                'type': 'string',
+                                'description': 'Name of the remote agent',
+                                'enum': allowed_agents,
+                            },
                             'task': {'type': 'string', 'description': 'Task to send to the agent'},
                         },
                         'required': ['agent_name', 'task'],
@@ -286,17 +360,23 @@ class RoutingAgent:
             {'role': 'user', 'content': user_text},
         ]
 
-        first = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=tools,
-            tool_choice='auto',
-        )
+        final_text = ''
+        max_steps = 6
+        for _ in range(max_steps):
+            step_resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                tool_choice='auto',
+            )
 
-        assistant_msg = first.choices[0].message
-        tool_calls = getattr(assistant_msg, 'tool_calls', None) or []
+            assistant_msg = step_resp.choices[0].message
+            tool_calls = getattr(assistant_msg, 'tool_calls', None) or []
 
-        if tool_calls:
+            if not tool_calls:
+                final_text = assistant_msg.content or ''
+                break
+
             messages.append({
                 'role': 'assistant',
                 'content': assistant_msg.content or '',
@@ -315,17 +395,27 @@ class RoutingAgent:
                 if func_name == 'send_message':
                     agent_name = args.get('agent_name')
                     task = args.get('task', '')
-                    result = await self.send_message(agent_name, task, state)
-                    result_json = (
-                        result.model_dump(exclude_none=True) if hasattr(result, 'model_dump') else str(result)
-                    )
-                    messages.append({
-                        'role': 'tool',
-                        'tool_call_id': tc.id,
-                        'name': func_name,
-                        'content': json.dumps(result_json),
-                    })
-                    yield {'type': 'tool_response', 'name': func_name, 'content': result_json}
+                    try:
+                        result = await self.send_message(agent_name, task, state)
+                        result_json = (
+                            result.model_dump(exclude_none=True) if hasattr(result, 'model_dump') else str(result)
+                        )
+                        messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tc.id,
+                            'name': func_name,
+                            'content': json.dumps(result_json),
+                        })
+                        yield {'type': 'tool_response', 'name': func_name, 'content': result_json}
+                    except Exception as e:
+                        error_msg = f"Routing error: {type(e).__name__}: {e} | Allowed agents: {allowed_agents}"
+                        messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tc.id,
+                            'name': func_name,
+                            'content': error_msg,
+                        })
+                        yield {'type': 'tool_response', 'name': func_name, 'content': {'error': error_msg}}
                 else:
                     messages.append({
                         'role': 'tool',
@@ -334,11 +424,6 @@ class RoutingAgent:
                         'content': f'Unknown tool: {func_name}',
                     })
                     yield {'type': 'tool_response', 'name': func_name, 'content': {'error': 'Unknown tool'}}
-
-            final = client.chat.completions.create(model=model, messages=messages)
-            final_text = final.choices[0].message.content or ''
-        else:
-            final_text = assistant_msg.content or ''
 
         yield {'type': 'final', 'content': final_text}
 
@@ -349,7 +434,9 @@ def _get_initialized_routing_agent_sync() -> RoutingAgent:
     async def _async_main() -> RoutingAgent:
         routing_agent_instance = await RoutingAgent.create(
             remote_agent_addresses=[
-                os.getenv('AIR_AGENT_URL', 'http://localhost:10002'),
+                # Path-based routing to avoid DNS reliance
+                os.getenv('AIR_AGENT_URL', 'http://localhost:10002/finder'),
+                os.getenv('RES_AGENT_URL', 'http://localhost:10002/reserve'),
                 os.getenv('WEA_AGENT_URL', 'http://localhost:10001'),
             ]
         )

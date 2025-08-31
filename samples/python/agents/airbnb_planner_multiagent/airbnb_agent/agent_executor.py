@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class AirbnbAgentExecutor(AgentExecutor):
     """AirbnbAgentExecutor that uses an agent with preloaded tools."""
 
-    def __init__(self, mcp_tools: list[Any]):
+    def __init__(self, mcp_tools: list[Any], variant: str = 'finder'):
         """Initializes the AirbnbAgentExecutor.
 
         Args:
@@ -33,7 +33,7 @@ class AirbnbAgentExecutor(AgentExecutor):
         logger.info(
             f'Initializing AirbnbAgentExecutor with {len(mcp_tools) if mcp_tools else "no"} MCP tools.'
         )
-        self.agent = AirbnbAgent(mcp_tools=mcp_tools)
+        self.agent = AirbnbAgent(mcp_tools=mcp_tools, variant=variant)
 
     @override
     async def execute(

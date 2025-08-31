@@ -2,6 +2,7 @@
 # pylint: disable=logging-fstring-interpolation
 import logging
 import os
+import uuid
 
 from collections.abc import AsyncIterable
 from typing import Any, Literal
@@ -16,6 +17,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
+from langchain_core.tools import tool
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,29 @@ class ResponseFormat(BaseModel):
     message: str
 
 
+class ReserveRequest(BaseModel):
+    """Structured input for making a reservation (mock)."""
+
+    listing_url: str
+    check_in: str
+    check_out: str
+    guests: int = 1
+
+
+@tool("reserve_listing", args_schema=ReserveRequest)
+def reserve_listing(listing_url: str, check_in: str, check_out: str, guests: int = 1) -> str:
+    """Reserve the specified Airbnb listing (mock). Provide listing_url, check_in (YYYY-MM-DD), check_out (YYYY-MM-DD), and guests."""
+    booking_id = uuid.uuid4().hex[:10]
+    return (
+        f"Reservation confirmed.\n"
+        f"Booking ID: {booking_id}\n"
+        f"Listing: {listing_url}\n"
+        f"Check-in: {check_in}\n"
+        f"Check-out: {check_out}\n"
+        f"Guests: {guests}"
+    )
+
+
 class AirbnbAgent:
     """Airbnb Agent Example."""
 
@@ -45,11 +70,12 @@ class AirbnbAgent:
 
     SUPPORTED_CONTENT_TYPES = ['text', 'text/plain']
 
-    def __init__(self, mcp_tools: list[Any]):  # Modified to accept mcp_tools
+    def __init__(self, mcp_tools: list[Any], variant: str = 'finder'):  # Modified to accept mcp_tools
         """Initializes the Airbnb agent.
 
         Args:
             mcp_tools: A list of preloaded MCP (Model Context Protocol) tools.
+            variant: Either 'finder' (search) or 'reserve' (booking-focused).
         """
         logger.info('Initializing AirbnbAgent with preloaded MCP tools...')
         try:
@@ -69,14 +95,28 @@ class AirbnbAgent:
         if not self.mcp_tools:
             raise ValueError('No MCP tools provided to AirbnbAgent')
 
+        # Variant-specific instruction augmentation
+        self.variant = variant
+        if self.variant == 'reserve':
+            self.SYSTEM_INSTRUCTION += (
+                "\n\nReservation mode: If the user asks to reserve one of the previously presented listings, "
+                "use the reserve_listing tool. Extract listing URL (or infer from context), check-in, check-out, and guests. "
+                "Confirm the reservation details in Markdown, including the booking ID returned by the tool."
+            )
+
     async def ainvoke(self, query: str, session_id: str) -> dict[str, Any]:
         logger.info(
             f"Airbnb.ainvoke called with query: '{query}', session_id: '{session_id}'"
         )
         try:
+            # Include local reserve tool in addition to MCP tools
+            tools = list(self.mcp_tools)
+            if 'reserve' in self.variant or 'finder' in self.variant:
+                tools.append(reserve_listing)
+
             airbnb_agent_runnable = create_react_agent(
                 self.model,
-                tools=self.mcp_tools,  # Use preloaded tools
+                tools=tools,  # Preloaded tools + reserve tool
                 checkpointer=memory,
                 prompt=self.SYSTEM_INSTRUCTION,
                 response_format=(
@@ -260,9 +300,11 @@ class AirbnbAgent:
         logger.info(
             f"AirbnbAgent.stream called with query: '{query}', sessionId: '{session_id}'"
         )
+        tools = list(self.mcp_tools)
+        tools.append(reserve_listing)
         agent_runnable = create_react_agent(
             self.model,
-            tools=self.mcp_tools,  # Use preloaded tools
+            tools=tools,  # Preloaded tools + reserve tool
             checkpointer=memory,
             prompt=self.SYSTEM_INSTRUCTION,
             response_format=(
