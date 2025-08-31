@@ -6,7 +6,7 @@
 > **⚠️ Important:** A2A is a work in progress (WIP) thus, in the near future there might be changes that are different from what demonstrated here.
 ----
 
-This document describes a web application demonstrating the integration of Agent2Agent (A2A), Google Agent Development Kit (ADK) for multi-agent orchestration with Model Context Protocol (MCP) clients. The application features a host agent coordinating tasks between remote agents that interact with various MCP servers to fulfill user requests.
+This document describes a web application demonstrating the integration of Agent2Agent (A2A) for multi-agent orchestration with Model Context Protocol (MCP) clients. The application features a host agent coordinating tasks between remote agents that interact with various MCP servers to fulfill user requests.
 
 ## Architecture
 
@@ -32,15 +32,13 @@ Before running the application locally, ensure you have the following installed:
 - Create a `.env` file in `airbnb_agent` and `weather_agent` folder with the following content:
 
     ```bash
-    GOOGLE_API_KEY="your_api_key_here" 
+
     ```
 
 - Create `.env` file in `host_agent/` folder with the following content:
 
     ```bash
-    GOOGLE_GENAI_USE_VERTEXAI=TRUE
-    GOOGLE_CLOUD_PROJECT="your project"
-    GOOGLE_CLOUD_LOCATION=global
+
     AIR_AGENT_URL=http://localhost:10002
     WEA_AGENT_URL=http://localhost:10001
     ```
@@ -80,11 +78,6 @@ Here are example questions:
 
 - "Please find a room in LA, CA, June 20-25, 2025, two adults"
 
-## References
-
-- <https://github.com/google/a2a-python>
-- <https://codelabs.developers.google.com/intro-a2a-purchasing-concierge#1>
-- <https://google.github.io/adk-docs/>
 
 ## Disclaimer
 

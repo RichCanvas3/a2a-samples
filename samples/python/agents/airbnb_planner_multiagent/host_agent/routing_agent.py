@@ -4,7 +4,7 @@ import json
 import os
 import uuid
 
-from typing import Any
+from typing import Any, AsyncIterator, Dict, List
 
 import httpx
 
@@ -12,17 +12,13 @@ from a2a.client import A2ACardResolver
 from a2a.types import (
     AgentCard,
     MessageSendParams,
-    Part,
     SendMessageRequest,
     SendMessageResponse,
     SendMessageSuccessResponse,
     Task,
 )
 from dotenv import load_dotenv
-from google.adk import Agent
-from google.adk.agents.callback_context import CallbackContext
-from google.adk.agents.readonly_context import ReadonlyContext
-from google.adk.tools.tool_context import ToolContext
+from openai import OpenAI
 from remote_agent_connection import (
     RemoteAgentConnections,
     TaskUpdateCallback,
@@ -32,20 +28,11 @@ from remote_agent_connection import (
 load_dotenv()
 
 
-def convert_part(part: Part, tool_context: ToolContext):
-    """Convert a part to text. Only text parts are supported."""
-    if part.type == 'text':
-        return part.text
-
-    return f'Unknown type: {part.type}'
-
-
-def convert_parts(parts: list[Part], tool_context: ToolContext):
-    """Convert parts to text."""
-    rval = []
-    for p in parts:
-        rval.append(convert_part(p, tool_context))
-    return rval
+SYSTEM_PROMPT = (
+    "You are an expert Routing Delegator. Your job is to route user requests "
+    "to remote agents using the send_message tool, and then present the remote "
+    "agent's result to the user. Rely on tools only; do not fabricate results."
+)
 
 
 def create_send_message_payload(
@@ -130,64 +117,32 @@ class RoutingAgent:
         await instance._async_init_components(remote_agent_addresses)
         return instance
 
-    def create_agent(self) -> Agent:
-        """Create an instance of the RoutingAgent."""
-        return Agent(
-            model='gemini-2.5-flash-lite',
-            name='Routing_agent',
-            instruction=self.root_instruction,
-            before_model_callback=self.before_model_callback,
-            description=(
-                'This Routing agent orchestrates the decomposition of the user asking for weather forecast or airbnb accommodation'
-            ),
-            tools=[
-                self.send_message,
-            ],
+    def _openai_client(self) -> OpenAI:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError('OPENAI_API_KEY environment variable is not set')
+        return OpenAI(api_key=api_key)
+
+    def _build_system_prompt(self, state: Dict[str, Any]) -> str:
+        current_active = self._get_active_agent_name(state)
+        return (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"Available Agents: {self.agents}\n"
+            f"Currently Active Seller Agent: {current_active}"
         )
 
-    def root_instruction(self, context: ReadonlyContext) -> str:
-        """Generate the root instruction for the RoutingAgent."""
-        current_agent = self.check_active_agent(context)
-        return f"""
-        **Role:** You are an expert Routing Delegator. Your primary function is to accurately delegate user inquiries regarding weather or accommodations to the appropriate specialized remote agents.
-
-        **Core Directives:**
-
-        * **Task Delegation:** Utilize the `send_message` function to assign actionable tasks to remote agents.
-        * **Contextual Awareness for Remote Agents:** If a remote agent repeatedly requests user confirmation, assume it lacks access to the         full conversation history. In such cases, enrich the task description with all necessary contextual information relevant to that         specific agent.
-        * **Autonomous Agent Engagement:** Never seek user permission before engaging with remote agents. If multiple agents are required to         fulfill a request, connect with them directly without requesting user preference or confirmation.
-        * **Transparent Communication:** Always present the complete and detailed response from the remote agent to the user.
-        * **User Confirmation Relay:** If a remote agent asks for confirmation, and the user has not already provided it, relay this         confirmation request to the user.
-        * **Focused Information Sharing:** Provide remote agents with only relevant contextual information. Avoid extraneous details.
-        * **No Redundant Confirmations:** Do not ask remote agents for confirmation of information or actions.
-        * **Tool Reliance:** Strictly rely on available tools to address user requests. Do not generate responses based on assumptions. If         information is insufficient, request clarification from the user.
-        * **Prioritize Recent Interaction:** Focus primarily on the most recent parts of the conversation when processing requests.
-        * **Active Agent Prioritization:** If an active agent is already engaged, route subsequent related requests to that agent using the         appropriate task update tool.
-
-        **Agent Roster:**
-
-        * Available Agents: `{self.agents}`
-        * Currently Active Seller Agent: `{current_agent['active_agent']}`
-                """
-
-    def check_active_agent(self, context: ReadonlyContext):
-        state = context.state
+    def _get_active_agent_name(self, state: Dict[str, Any]) -> str:
         if (
             'session_id' in state
-            and 'session_active' in state
-            and state['session_active']
+            and state.get('session_active')
             and 'active_agent' in state
         ):
-            return {'active_agent': f'{state["active_agent"]}'}
-        return {'active_agent': 'None'}
+            return f"{state['active_agent']}"
+        return 'None'
 
-    def before_model_callback(
-        self, callback_context: CallbackContext, llm_request
-    ):
-        state = callback_context.state
-        if 'session_active' not in state or not state['session_active']:
-            if 'session_id' not in state:
-                state['session_id'] = str(uuid.uuid4())
+    def ensure_session_state(self, state: Dict[str, Any]) -> None:
+        if not state.get('session_active'):
+            state['session_id'] = state.get('session_id') or str(uuid.uuid4())
             state['session_active'] = True
 
     def list_remote_agents(self):
@@ -204,9 +159,7 @@ class RoutingAgent:
             )
         return remote_agent_info
 
-    async def send_message(
-        self, agent_name: str, task: str, tool_context: ToolContext
-    ):
+    async def send_message(self, agent_name: str, task: str, state: Dict[str, Any]):
         """Sends a task to remote seller agent.
 
         This will send a message to the remote agent named agent_name.
@@ -222,7 +175,6 @@ class RoutingAgent:
         """
         if agent_name not in self.remote_agent_connections:
             raise ValueError(f'Agent {agent_name} not found')
-        state = tool_context.state
         state['active_agent'] = agent_name
         client = self.remote_agent_connections[agent_name]
 
@@ -300,18 +252,108 @@ class RoutingAgent:
 
         return send_response.root.result
 
+    async def handle(self, user_text: str, state: Dict[str, Any]) -> AsyncIterator[Dict[str, Any]]:
+        """Core routing loop using OpenAI tool-calling.
 
-def _get_initialized_routing_agent_sync() -> Agent:
+        Yields structured dict events: {type: 'tool_call'|'tool_response'|'final', name?, content}
+        """
+        self.ensure_session_state(state)
+
+        client = self._openai_client()
+        model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+
+        tools: List[Dict[str, Any]] = [
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'send_message',
+                    'description': 'Send a task to a remote agent and obtain its response.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'agent_name': {'type': 'string', 'description': 'Name of the remote agent'},
+                            'task': {'type': 'string', 'description': 'Task to send to the agent'},
+                        },
+                        'required': ['agent_name', 'task'],
+                    },
+                },
+            }
+        ]
+
+        system_prompt = self._build_system_prompt(state)
+        messages: List[Dict[str, Any]] = [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_text},
+        ]
+
+        first = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice='auto',
+        )
+
+        assistant_msg = first.choices[0].message
+        tool_calls = getattr(assistant_msg, 'tool_calls', None) or []
+
+        if tool_calls:
+            messages.append({
+                'role': 'assistant',
+                'content': assistant_msg.content or '',
+                'tool_calls': [tc.to_dict() for tc in tool_calls],
+            })
+
+            for tc in tool_calls:
+                func_name = tc.function.name
+                try:
+                    args = json.loads(tc.function.arguments or '{}')
+                except json.JSONDecodeError:
+                    args = {}
+
+                yield {'type': 'tool_call', 'name': func_name, 'content': args}
+
+                if func_name == 'send_message':
+                    agent_name = args.get('agent_name')
+                    task = args.get('task', '')
+                    result = await self.send_message(agent_name, task, state)
+                    result_json = (
+                        result.model_dump(exclude_none=True) if hasattr(result, 'model_dump') else str(result)
+                    )
+                    messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tc.id,
+                        'name': func_name,
+                        'content': json.dumps(result_json),
+                    })
+                    yield {'type': 'tool_response', 'name': func_name, 'content': result_json}
+                else:
+                    messages.append({
+                        'role': 'tool',
+                        'tool_call_id': tc.id,
+                        'name': func_name,
+                        'content': f'Unknown tool: {func_name}',
+                    })
+                    yield {'type': 'tool_response', 'name': func_name, 'content': {'error': 'Unknown tool'}}
+
+            final = client.chat.completions.create(model=model, messages=messages)
+            final_text = final.choices[0].message.content or ''
+        else:
+            final_text = assistant_msg.content or ''
+
+        yield {'type': 'final', 'content': final_text}
+
+
+def _get_initialized_routing_agent_sync() -> RoutingAgent:
     """Synchronously creates and initializes the RoutingAgent."""
 
-    async def _async_main() -> Agent:
+    async def _async_main() -> RoutingAgent:
         routing_agent_instance = await RoutingAgent.create(
             remote_agent_addresses=[
                 os.getenv('AIR_AGENT_URL', 'http://localhost:10002'),
                 os.getenv('WEA_AGENT_URL', 'http://localhost:10001'),
             ]
         )
-        return routing_agent_instance.create_agent()
+        return routing_agent_instance
 
     try:
         return asyncio.run(_async_main())
