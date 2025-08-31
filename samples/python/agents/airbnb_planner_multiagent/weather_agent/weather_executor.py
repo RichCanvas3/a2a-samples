@@ -1,6 +1,10 @@
 import logging
+import json
+import os
 
-from typing import TYPE_CHECKING
+from typing import Any, Dict, List, Optional
+
+from openai import OpenAI
 
 from a2a.server.agent_execution import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
@@ -8,215 +12,215 @@ from a2a.server.events.event_queue import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import (
     AgentCard,
-    FilePart,
-    FileWithBytes,
-    FileWithUri,
     Part,
     TaskState,
     TextPart,
     UnsupportedOperationError,
 )
 from a2a.utils.errors import ServerError
-from google.adk import Runner
-from google.genai import types
 
-
-if TYPE_CHECKING:
-    from google.adk.sessions.session import Session
+from weather_mcp import (
+    get_alerts,
+    get_forecast,
+    get_forecast_by_city,
+)
 
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# Constants
-DEFAULT_USER_ID = 'self'
+
+SYSTEM_INSTRUCTION = (
+    "You are a specialized weather forecast assistant. Your primary function is to "
+    "utilize the provided tools to retrieve and relay weather information in response "
+    "to user queries. You must rely exclusively on these tools for data and refrain "
+    "from inventing information. Ensure that all responses include the detailed output "
+    "from the tools used and are formatted in Markdown."
+)
 
 
 class WeatherExecutor(AgentExecutor):
-    """An AgentExecutor that runs an ADK-based Agent for weather."""
+    """An AgentExecutor that uses the OpenAI Chat Completions API with tool calling."""
 
-    def __init__(self, runner: Runner, card: AgentCard):
-        self.runner = runner
-        self._card = card
-        # Track active sessions for potential cancellation
-        self._active_sessions: set[str] = set()
-
-    async def _process_request(
+    def __init__(
         self,
-        new_message: types.Content,
-        session_id: str,
-        task_updater: TaskUpdater,
+        card: AgentCard,
+        *,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> None:
-        session_obj = await self._upsert_session(session_id)
-        # Update session_id with the ID from the resolved session object.
-        # (it may be the same as the one passed in if it already exists)
-        session_id = session_obj.id
+        self._card = card
+        self._active_sessions: set[str] = set()
+        self._sessions: dict[str, List[Dict[str, Any]]] = {}
 
-        # Track this session as active
-        self._active_sessions.add(session_id)
+        self._model = model or os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+        self._client = OpenAI(api_key=api_key or os.getenv('OPENAI_API_KEY'))
 
-        try:
-            async for event in self.runner.run_async(
-                session_id=session_id,
-                user_id=DEFAULT_USER_ID,
-                new_message=new_message,
-            ):
-                if event.is_final_response():
-                    parts = [
-                        convert_genai_part_to_a2a(part)
-                        for part in event.content.parts
-                        if (part.text or part.file_data or part.inline_data)
-                    ]
-                    logger.debug('Yielding final response: %s', parts)
-                    await task_updater.add_artifact(parts)
-                    await task_updater.update_status(
-                        TaskState.completed, final=True
-                    )
-                    break
-                if not event.get_function_calls():
-                    logger.debug('Yielding update response')
-                    await task_updater.update_status(
-                        TaskState.working,
-                        message=task_updater.new_agent_message(
-                            [
-                                convert_genai_part_to_a2a(part)
-                                for part in event.content.parts
-                                if (
-                                    part.text
-                                    or part.file_data
-                                    or part.inline_data
-                                )
-                            ],
-                        ),
-                    )
-                else:
-                    logger.debug('Skipping event')
-        finally:
-            # Remove from active sessions when done
-            self._active_sessions.discard(session_id)
+        # Define tool schemas for function calling
+        self._tools: List[Dict[str, Any]] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_alerts",
+                    "description": "Get active weather alerts for a US state (2-letter code).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "state": {"type": "string", "description": "Two-letter US state code, e.g., CA"}
+                        },
+                        "required": ["state"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_forecast",
+                    "description": "Get forecast by latitude and longitude using NWS.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "latitude": {"type": "number"},
+                            "longitude": {"type": "number"},
+                        },
+                        "required": ["latitude", "longitude"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_forecast_by_city",
+                    "description": "Get forecast by US city and state (uses geocoding).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string"},
+                            "state": {"type": "string"},
+                        },
+                        "required": ["city", "state"],
+                    },
+                },
+            },
+        ]
+
+        self._tool_impl = {
+            'get_alerts': get_alerts,
+            'get_forecast': get_forecast,
+            'get_forecast_by_city': get_forecast_by_city,
+        }
 
     async def execute(
-        self,
-        context: RequestContext,
-        event_queue: EventQueue,
-    ):
-        # Run the agent until either complete or the task is suspended.
+        self, context: RequestContext, event_queue: EventQueue
+    ) -> None:
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
-        # Immediately notify that the task is submitted.
         if not context.current_task:
             await updater.update_status(TaskState.submitted)
         await updater.update_status(TaskState.working)
-        await self._process_request(
-            types.UserContent(
-                parts=[
-                    convert_a2a_part_to_genai(part)
-                    for part in context.message.parts
-                ],
-            ),
-            context.context_id,
-            updater,
-        )
-        logger.debug('[weather] execute exiting')
 
-    async def cancel(self, context: RequestContext, event_queue: EventQueue):
-        """Cancel the execution for the given context.
+        session_id = context.context_id
+        self._active_sessions.add(session_id)
 
-        Currently logs the cancellation attempt as the underlying ADK runner
-        doesn't support direct cancellation of ongoing tasks.
-        """
+        try:
+            # Build or reuse session message history
+            messages = self._sessions.get(session_id)
+            if messages is None:
+                messages = [
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                ]
+                self._sessions[session_id] = messages
+
+            user_text = self._flatten_parts_to_text(context.message.parts)
+            messages.append({"role": "user", "content": user_text})
+
+            # First pass: allow tool calling
+            initial = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                tools=self._tools,
+                tool_choice="auto",
+            )
+
+            assistant_msg = initial.choices[0].message
+            tool_calls = getattr(assistant_msg, 'tool_calls', None) or []
+
+            if tool_calls:
+                # Notify UI that tools are being used
+                await updater.update_status(
+                    TaskState.working,
+                    message=updater.new_agent_message(
+                        [TextPart(text=f"Using tools: {', '.join(tc.function.name for tc in tool_calls)}")]
+                    ),
+                )
+
+                # Record assistant tool call message
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_msg.content or "",
+                        "tool_calls": [tc.to_dict() for tc in tool_calls],
+                    }
+                )
+
+                # Execute each tool call and append results
+                for tc in tool_calls:
+                    func_name = tc.function.name
+                    func_args: Dict[str, Any] = {}
+                    try:
+                        if tc.function.arguments:
+                            func_args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        func_args = {}
+
+                    impl = self._tool_impl.get(func_name)
+                    tool_output = (
+                        await impl(**func_args) if impl is not None else f"Unknown tool: {func_name}"
+                    )
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": func_name,
+                            "content": str(tool_output),
+                        }
+                    )
+
+                # Final pass: produce user-facing response
+                final = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                )
+                final_text = final.choices[0].message.content or ""
+            else:
+                final_text = assistant_msg.content or ""
+
+            await updater.add_artifact([TextPart(text=final_text)])
+            await updater.update_status(TaskState.completed, final=True)
+
+        finally:
+            self._active_sessions.discard(session_id)
+
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         session_id = context.context_id
         if session_id in self._active_sessions:
             logger.info(
                 f'Cancellation requested for active weather session: {session_id}'
             )
-            # TODO: Implement proper cancellation when ADK supports it
             self._active_sessions.discard(session_id)
         else:
             logger.debug(
                 f'Cancellation requested for inactive weather session: {session_id}'
             )
-
         raise ServerError(error=UnsupportedOperationError())
 
-    async def _upsert_session(self, session_id: str) -> 'Session':
-        """Retrieves a session if it exists, otherwise creates a new one.
+    def _flatten_parts_to_text(self, parts: List[Part]) -> str:
+        texts: List[str] = []
+        for p in parts:
+            root = p.root
+            if hasattr(root, 'text') and isinstance(root.text, str):
+                texts.append(root.text)
+            else:
+                texts.append('[non-text content omitted]')
+        return "\n".join(texts)
 
-        Ensures that async session service methods are properly awaited.
-        """
-        session = await self.runner.session_service.get_session(
-            app_name=self.runner.app_name,
-            user_id=DEFAULT_USER_ID,
-            session_id=session_id,
-        )
-        if session is None:
-            session = await self.runner.session_service.create_session(
-                app_name=self.runner.app_name,
-                user_id=DEFAULT_USER_ID,
-                session_id=session_id,
-            )
-        return session
-
-
-def convert_a2a_part_to_genai(part: Part) -> types.Part:
-    """Convert a single A2A Part type into a Google Gen AI Part type.
-
-    Args:
-        part: The A2A Part to convert
-
-    Returns:
-        The equivalent Google Gen AI Part
-
-    Raises:
-        ValueError: If the part type is not supported
-    """
-    part = part.root
-    if isinstance(part, TextPart):
-        return types.Part(text=part.text)
-    if isinstance(part, FilePart):
-        if isinstance(part.file, FileWithUri):
-            return types.Part(
-                file_data=types.FileData(
-                    file_uri=part.file.uri, mime_type=part.file.mime_type
-                )
-            )
-        if isinstance(part.file, FileWithBytes):
-            return types.Part(
-                inline_data=types.Blob(
-                    data=part.file.bytes, mime_type=part.file.mime_type
-                )
-            )
-        raise ValueError(f'Unsupported file type: {type(part.file)}')
-    raise ValueError(f'Unsupported part type: {type(part)}')
-
-
-def convert_genai_part_to_a2a(part: types.Part) -> Part:
-    """Convert a single Google Gen AI Part type into an A2A Part type.
-
-    Args:
-        part: The Google Gen AI Part to convert
-
-    Returns:
-        The equivalent A2A Part
-
-    Raises:
-        ValueError: If the part type is not supported
-    """
-    if part.text:
-        return TextPart(text=part.text)
-    if part.file_data:
-        return FilePart(
-            file=FileWithUri(
-                uri=part.file_data.file_uri,
-                mime_type=part.file_data.mime_type,
-            )
-        )
-    if part.inline_data:
-        return Part(
-            root=FilePart(
-                file=FileWithBytes(
-                    bytes=part.inline_data.data,
-                    mime_type=part.inline_data.mime_type,
-                )
-            )
-        )
-    raise ValueError(f'Unsupported part type: {part}')

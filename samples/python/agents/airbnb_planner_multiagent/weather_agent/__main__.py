@@ -13,17 +13,7 @@ from a2a.types import (
     AgentSkill,
 )
 from dotenv import load_dotenv
-from google.adk.artifacts import InMemoryArtifactService
-from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from weather_executor import (
-    WeatherExecutor,
-)
-
-from weather_agent import (
-    create_weather_agent,
-)
+from weather_executor import WeatherExecutor
 
 
 load_dotenv()
@@ -35,15 +25,9 @@ DEFAULT_PORT = 10001
 
 
 def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
-    # Verify an API key is set.
-    # Not required if using Vertex AI APIs.
-    if os.getenv('GOOGLE_GENAI_USE_VERTEXAI') != 'TRUE' and not os.getenv(
-        'GOOGLE_API_KEY'
-    ):
-        raise ValueError(
-            'GOOGLE_API_KEY environment variable not set and '
-            'GOOGLE_GENAI_USE_VERTEXAI is not TRUE.'
-        )
+    # Verify OpenAI API key is set.
+    if not os.getenv('OPENAI_API_KEY'):
+        raise ValueError('OPENAI_API_KEY environment variable not set.')
 
     skill = AgentSkill(
         id='weather_search',
@@ -66,15 +50,11 @@ def main(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         skills=[skill],
     )
 
-    adk_agent = create_weather_agent()
-    runner = Runner(
-        app_name=agent_card.name,
-        agent=adk_agent,
-        artifact_service=InMemoryArtifactService(),
-        session_service=InMemorySessionService(),
-        memory_service=InMemoryMemoryService(),
+    agent_executor = WeatherExecutor(
+        card=agent_card,
+        model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
+        api_key=os.getenv('OPENAI_API_KEY'),
     )
-    agent_executor = WeatherExecutor(runner, agent_card)
 
     request_handler = DefaultRequestHandler(
         agent_executor=agent_executor, task_store=InMemoryTaskStore()

@@ -1,13 +1,16 @@
-# Remote Agent built by ADK
+# Weather Agent (OpenAI-based)
 
-This example shows how to create an A2A Server that uses an ADK-based Agent.
+This example shows how to create an A2A Server that uses an OpenAI-backed agent with tool/function calling to query weather information through built-in tools defined in `weather_mcp.py`.
 
-## Running the example
+## Environment
 
-1. Create a .env file using the `example.env` file as a template.
+Create a `.env` file using `example.env` as a template and set:
 
-2. Run the example
+- `OPENAI_API_KEY`: Your OpenAI API key
+- `OPENAI_MODEL` (optional): Defaults to `gpt-4o-mini`
 
-   ```bash
-   uv run .
-   ```
+## Run
+
+```bash
+uv run .
+```
