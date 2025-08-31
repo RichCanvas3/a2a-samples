@@ -228,12 +228,25 @@ class RoutingAgent:
 
         if not client:
             raise ValueError(f'Client not available for {agent_name}')
-        task_id = state['task_id'] if 'task_id' in state else str(uuid.uuid4())
+        # Track task ids per remote agent so we don't send a task id from one
+        # agent to another.
+        task_ids_by_agent = state.get('task_ids_by_agent')
+        if task_ids_by_agent is None or not isinstance(task_ids_by_agent, dict):
+            task_ids_by_agent = {}
+            state['task_ids_by_agent'] = task_ids_by_agent
+        # Only include a task id if we already have one for this agent.
+        task_id = task_ids_by_agent.get(agent_name)
 
-        if 'context_id' in state:
-            context_id = state['context_id']
+        # Track context ids per remote agent as well.
+        context_ids_by_agent = state.get('context_ids_by_agent')
+        if context_ids_by_agent is None or not isinstance(context_ids_by_agent, dict):
+            context_ids_by_agent = {}
+            state['context_ids_by_agent'] = context_ids_by_agent
+        if agent_name in context_ids_by_agent:
+            context_id = context_ids_by_agent[agent_name]
         else:
             context_id = str(uuid.uuid4())
+            context_ids_by_agent[agent_name] = context_id
 
         message_id = ''
         metadata = {}
@@ -278,6 +291,12 @@ class RoutingAgent:
         if not isinstance(send_response.root.result, Task):
             print('received non-task response. Aborting get task ')
             return None
+
+        # Persist the real task id for this agent for subsequent updates/messages
+        try:
+            task_ids_by_agent[agent_name] = send_response.root.result.id  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
         return send_response.root.result
 
