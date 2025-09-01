@@ -1,20 +1,25 @@
 import asyncio
 import os
 import sys
+import logging
 import traceback  # Import the traceback module
 
 from collections.abc import AsyncIterator
 from pprint import pformat
 
 import gradio as gr
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 
-# Allow importing the ERC-8004 adapter from the sibling airbnb_agent package
-try:
-    from common_utils.erc8004_adapter import Erc8004Adapter  
-except Exception:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from common_utils.erc8004_adapter import Erc8004Adapter  # type: ignore
+# Ensure the repository package root is on sys.path so we can import sibling packages
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.dirname(_this_dir)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from common_utils.erc8004_adapter import Erc8004Adapter  # type: ignore
 
 from routing_agent import (
     root_agent as routing_agent,
@@ -26,6 +31,8 @@ USER_ID = 'default_user'
 SESSION_ID = 'default_session'
 
 OPENAI_MODEL = 'gpt-4o-mini'
+
+logger = logging.getLogger(__name__)
 
 
 async def get_response_from_agent(
@@ -62,9 +69,7 @@ async def get_response_from_agent(
 
 
 async def main():
-    """Main gradio app."""
-    # OpenAI routing requires OPENAI_API_KEY in environment.
-
+    """Main app: serves AgentCard and mounts Gradio UI under /."""
     # ERC-8004: register Assistant agent identity (optional)
     try:
         assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
@@ -72,7 +77,7 @@ async def main():
         assistant_domain = (
             os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
             or os.getenv('ERC8004_AGENT_DOMAIN')
-            or f"assistant.localhost:8083"
+            or 'assistant.localhost:8083'
         )
         adapter.ensure_identity('assistant', agent_domain=assistant_domain)
     except Exception:
@@ -95,14 +100,55 @@ async def main():
             get_response_from_agent,
             title='A2A Host Agent',
             description='This assistant can help you to check weather and find airbnb accommodation',
+            type='messages',
         )
 
-    print('Launching Gradio interface...')
-    demo.queue().launch(
-        server_name='0.0.0.0',
-        server_port=8083,
-    )
-    print('Gradio application has been shut down.')
+    # Build FastAPI app and mount Gradio under a non-root path to avoid '//' redirects
+    app = FastAPI()
+
+    @app.get('/.well-known/agent-card.json')
+    def agent_card():
+        host = os.environ.get('APP_HOST', '0.0.0.0')
+        port = int(os.environ.get('APP_PORT', '8083'))
+        app_url = os.environ.get('APP_URL', f'http://{host}:{port}')
+        capabilities = AgentCapabilities(streaming=True)
+        skill = AgentSkill(
+            id='assistant',
+            name='Travel assistant',
+            description='Find and reserve places to stay and check weather',
+            tags=['finder', 'reserve', 'weather'],
+            examples=['Find a place in LA and reserve it, then check weather'],
+        )
+        card = AgentCard(
+            name='assistant',
+            description='Travel assistant for finding and booking stays and checking weather',
+            url=app_url,
+            version='1.0.0',
+            default_input_modes=['text', 'text/plain'],
+            default_output_modes=['text', 'text/plain'],
+            capabilities=capabilities,
+            skills=[skill],
+        )
+        return card.model_dump(exclude_none=True)
+
+    @app.get('/.well-known/agent-ids')
+    def agent_ids():
+        adapter = Erc8004Adapter()
+        logger.info(f'************ FINDER_DOMAIN: {os.getenv("FINDER_DOMAIN", "finder.localhost:10002")}')
+        finder = adapter.get_agent_by_domain(os.getenv('FINDER_DOMAIN', 'finder.localhost:10002'))
+        reserve = adapter.get_agent_by_domain(os.getenv('RESERVE_DOMAIN', 'reserve.localhost:10002'))
+        return {'finder': finder, 'reserve': reserve}
+
+    # Redirect root to the mounted Gradio UI path to avoid double-slash ('//') redirects
+    @app.get('/')
+    def root_redirect():
+        return RedirectResponse(url='/ui')
+
+    gr.mount_gradio_app(app, demo, path='/ui')
+
+    config = uvicorn.Config(app=app, host='0.0.0.0', port=8083, log_level='info')
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 if __name__ == '__main__':

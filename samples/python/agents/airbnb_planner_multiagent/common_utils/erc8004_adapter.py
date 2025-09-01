@@ -42,11 +42,15 @@ class Erc8004Adapter:
 
         self._w3: Web3 | None = None
         self._tx_timeout_sec = int(os.getenv('ERC8004_TX_TIMEOUT_SEC', '180'))
-        if self.enabled and self.rpc_url and self.private_key:
+        # Initialize Web3 if RPC is available, even without a private key (read-only ops)
+        if self.rpc_url:
             try:
                 self._w3 = Web3(Web3.HTTPProvider(self.rpc_url, request_kwargs={"timeout": 20}))
-                acct = self._w3.eth.account.from_key(self.private_key)
-                logger.info('ERC-8004 Web3 client initialized (address=%s)', acct.address)
+                if self.private_key:
+                    acct = self._w3.eth.account.from_key(self.private_key)
+                    logger.info('ERC-8004 Web3 client initialized (address=%s)', acct.address)
+                else:
+                    logger.info('ERC-8004 Web3 client initialized (read-only)')
             except Exception as e:
                 logger.warning('ERC-8004: failed to init Web3 client: %s', e)
                 self._w3 = None
@@ -309,5 +313,57 @@ class Erc8004Adapter:
             payload,
             self.reputation_registry,
         )
+
+    def get_agent_by_domain(self, domain: str) -> Optional[dict[str, Any]]:
+        """Resolve agent info by domain.
+
+        Tries a direct resolveByDomain/domain-based function on the registry.
+        If unavailable, falls back to resolving by address inferred from
+        variant-specific private keys (finder/reserve) based on the domain name.
+        """
+
+        logger.info('************** ERC-8004: get_agent_by_domain: %s', domain)
+        if not (self._w3 and self.identity_registry):
+            logger.info('************** ERC-8004: not self._w3: %s', self._w3)
+            logger.info('************** ERC-8004: not self.identity_registry: %s', self.identity_registry)
+            return None
+        identity = self._get_identity_contract()
+        if identity is None:
+            logger.info('************** ERC-8004: no identity contract: %s', domain)
+            return None
+        # Attempt direct domain resolver methods
+        logger.info('************** ERC-8004: attempt direct domain resolver methods: %s', identity)
+        for fn_name in ('resolveByDomain', 'getAgentByDomain', 'resolveDomain'):
+            try:
+                fn = getattr(identity.functions, fn_name)
+                result = fn(domain).call()
+                # Expect (agentId, agentDomain, agentAddress) or similar tuple
+                if isinstance(result, (list, tuple)) and len(result) >= 3:
+                    agent_id = int(result[0]) if result[0] is not None else 0
+                    agent_domain = result[1]
+                    agent_addr = result[2]
+                    if agent_id > 0:
+                        return {'agent_id': agent_id, 'domain': agent_domain, 'address': agent_addr}
+            except Exception:
+                pass
+
+        # Fallback: infer address by variant-specific private key and resolveByAddress
+        pk = None
+        dom_lower = (domain or '').lower()
+        if 'finder' in dom_lower:
+            pk = os.getenv('ERC8004_PRIVATE_KEY_FINDER') or os.getenv('ERC8004_PRIVATE_KEY')
+        elif 'reserve' in dom_lower:
+            pk = os.getenv('ERC8004_PRIVATE_KEY_RESERVE') or os.getenv('ERC8004_PRIVATE_KEY')
+        elif 'assistant' in dom_lower:
+            pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+        if pk:
+            try:
+                addr = self._w3.eth.account.from_key(pk).address
+                info = identity.functions.resolveByAddress(addr).call()
+                if info and len(info) >= 3 and int(info[0]) > 0:
+                    return {'agent_id': int(info[0]), 'domain': info[1], 'address': info[2]}
+            except Exception:
+                return None
+        return None
 
 
