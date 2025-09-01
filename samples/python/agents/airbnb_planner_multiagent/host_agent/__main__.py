@@ -1,10 +1,20 @@
 import asyncio
+import os
+import sys
 import traceback  # Import the traceback module
 
 from collections.abc import AsyncIterator
 from pprint import pformat
 
 import gradio as gr
+
+# Allow importing the ERC-8004 adapter from the sibling airbnb_agent package
+try:
+    from airbnb_agent.erc8004_adapter import Erc8004Adapter  # type: ignore
+except Exception:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from airbnb_agent.erc8004_adapter import Erc8004Adapter  # type: ignore
 
 from routing_agent import (
     root_agent as routing_agent,
@@ -54,6 +64,19 @@ async def get_response_from_agent(
 async def main():
     """Main gradio app."""
     # OpenAI routing requires OPENAI_API_KEY in environment.
+
+    # ERC-8004: register Assistant agent identity (optional)
+    try:
+        assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+        adapter = Erc8004Adapter(private_key=assistant_pk)
+        assistant_domain = (
+            os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
+            or os.getenv('ERC8004_AGENT_DOMAIN')
+            or f"assistant.localhost:8083"
+        )
+        adapter.ensure_identity('assistant', agent_domain=assistant_domain)
+    except Exception:
+        pass
 
     with gr.Blocks(
         theme=gr.themes.Ocean(), title='A2A Host Agent with Logo'
