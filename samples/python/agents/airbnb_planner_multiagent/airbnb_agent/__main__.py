@@ -32,6 +32,8 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
+from common_utils.erc8004_adapter import Erc8004Adapter
+from eth_account.messages import encode_defunct
 
 
 load_dotenv(override=True)
@@ -184,8 +186,8 @@ def main(
                         inferred_variant = 'finder'
                     else:
                         inferred_variant = 'reserve' if host_only.startswith('reserve.') else 'finder'
-                    card = get_agent_card(host_only, req_port, inferred_variant)
-                    response = JSONResponse(card.model_dump(exclude_none=True))
+                    card_dict = get_agent_card_dict(host_only, req_port, inferred_variant)
+                    response = JSONResponse(card_dict)
                     return await response(scope, receive, send)
                 # Route all other requests to the appropriate inner app
                 if path.startswith('/reserve'):
@@ -272,6 +274,73 @@ def get_agent_card(host: str, port: int, variant: str):
         capabilities=capabilities,
         skills=[skill],
     )
+
+
+def get_agent_card_dict(host: str, port: int, variant: str) -> dict[str, Any]:
+    """Build AgentCard dict and augment with ERC-8004 registration and trust models."""
+    base_card = get_agent_card(host, port, variant)
+    card_dict = base_card.model_dump(exclude_none=True)
+
+    registration = _build_erc8004_registration(port, variant)
+    if registration is not None:
+        card_dict['registrations'] = [registration]
+
+    trust_models_env = os.getenv('ERC8004_TRUST_MODELS', 'feedback')
+    trust_models = [m.strip() for m in trust_models_env.split(',') if m.strip()]
+    if trust_models:
+        card_dict['trustModels'] = trust_models
+
+    return card_dict
+
+
+def _build_erc8004_registration(port: int, variant: str) -> dict[str, Any] | None:
+    """Create ERC-8004 registration object with agentId, CAIP-10 address, and signature.
+
+    Signature is over the agent domain name.
+    """
+    try:
+        adapter = Erc8004Adapter()
+
+        # Determine domain for lookup/signing
+        if variant == 'reserve':
+            domain = os.getenv('RESERVE_DOMAIN') or os.getenv('ERC8004_AGENT_DOMAIN_RESERVE') or f'reserve.localhost:{port}'
+            private_key = os.getenv('ERC8004_PRIVATE_KEY_RESERVE') or os.getenv('ERC8004_PRIVATE_KEY')
+        else:
+            domain = os.getenv('FINDER_DOMAIN') or os.getenv('ERC8004_AGENT_DOMAIN_FINDER') or f'finder.localhost:{port}'
+            private_key = os.getenv('ERC8004_PRIVATE_KEY_FINDER') or os.getenv('ERC8004_PRIVATE_KEY')
+
+        info = adapter.get_agent_by_domain(domain)
+        if not info:
+            return None
+
+        agent_id_val = int(info.get('agent_id', 0)) if info.get('agent_id') is not None else 0
+        agent_eth_addr = str(info.get('address') or '').strip()
+        if agent_id_val <= 0 or not agent_eth_addr:
+            return None
+
+        # CAIP-10 address with Sepolia default (eip155:11155111)
+        chain_id = os.getenv('ERC8004_CHAIN_ID', '11155111')
+        caip10_addr = f'eip155:{chain_id}:{agent_eth_addr}'
+
+        registration: dict[str, Any] = {
+            'agentId': agent_id_val,
+            'agentAddress': caip10_addr,
+        }
+
+        # Optional ownership signature over the domain
+        if private_key:
+            try:
+                from eth_account import Account
+
+                msg = encode_defunct(text=domain)
+                signed = Account.sign_message(msg, private_key=private_key)
+                registration['signature'] = signed.signature.hex()
+            except Exception:
+                pass
+
+        return registration
+    except Exception:
+        return None
 
 
 @click.command()
