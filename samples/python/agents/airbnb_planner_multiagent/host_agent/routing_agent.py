@@ -7,6 +7,7 @@ import uuid
 from typing import Any, AsyncIterator, Dict, List
 
 import httpx
+from urllib.parse import urlparse, urlunparse
 
 from a2a.client import A2ACardResolver
 from a2a.types import (
@@ -23,6 +24,7 @@ from remote_agent_connection import (
     RemoteAgentConnections,
     TaskUpdateCallback,
 )
+from common_utils.erc8004_adapter import Erc8004Adapter
 
 
 load_dotenv()
@@ -89,19 +91,101 @@ class RoutingAgent:
                         await card_resolver.get_agent_card()
                     )  # get_agent_card is async
 
+                    # Prefer to show the original address to the UI, but keep the
+                    # actual connection URL as the resolved/fetchable address.
+                    try:
+                        card.url = address
+                    except Exception:
+                        pass
+
                     remote_connection = RemoteAgentConnections(
                         agent_card=card, agent_url=address
                     )
                     self.remote_agent_connections[card.name] = remote_connection
                     self.cards[card.name] = card
                 except httpx.ConnectError as e:
-                    print(
-                        f'ERROR: Failed to get agent card from {address}: {e}'
-                    )
+                    # Retry strategy for .localhost subdomains and missing variant path
+                    try:
+                        parsed = urlparse(address if '://' in address else f'http://{address}')
+                        hostname = parsed.hostname or ''
+                        port = parsed.port
+                        scheme = parsed.scheme or 'http'
+                        path = parsed.path or '/'
+
+                        new_host = hostname
+                        new_path = path
+                        # If subdomain like finder.localhost, use localhost for fetching
+                        if hostname.endswith('.localhost'):
+                            new_host = 'localhost'
+                        # Ensure path contains variant when implied by hostname
+                        if (('finder' in hostname or 'finder' in path) and not path.startswith('/finder')):
+                            new_path = '/finder'
+                        if (('reserve' in hostname or 'reserve' in path) and not path.startswith('/reserve')):
+                            new_path = '/reserve'
+
+                        if new_host != hostname or new_path != path:
+                            netloc = f"{new_host}:{port}" if port else new_host
+                            fallback_address = urlunparse((scheme, netloc, new_path, '', '', ''))
+                            # Try fetch with fallback
+                            card = await A2ACardResolver(client, fallback_address).get_agent_card()
+                            try:
+                                # Present original nice address to UI if possible
+                                card.url = address
+                            except Exception:
+                                pass
+                            remote_connection = RemoteAgentConnections(
+                                agent_card=card, agent_url=fallback_address
+                            )
+                            self.remote_agent_connections[card.name] = remote_connection
+                            self.cards[card.name] = card
+                            continue
+                        # If no rewrite possible, surface original error
+                        print(
+                            f'ERROR: Failed to get agent card from {address}: {e}'
+                        )
+                    except Exception as e2:
+                        print(
+                            f'ERROR: Failed to initialize connection for {address} with fallback: {e2}'
+                        )
                 except Exception as e:  # Catch other potential errors
-                    print(
-                        f'ERROR: Failed to initialize connection for {address}: {e}'
-                    )
+                    # Attempt same fallback rewrite strategy for generic errors
+                    try:
+                        parsed = urlparse(address if '://' in address else f'http://{address}')
+                        hostname = parsed.hostname or ''
+                        port = parsed.port
+                        scheme = parsed.scheme or 'http'
+                        path = parsed.path or '/'
+
+                        new_host = hostname
+                        new_path = path
+                        if hostname.endswith('.localhost'):
+                            new_host = 'localhost'
+                        if (('finder' in hostname or 'finder' in path) and not path.startswith('/finder')):
+                            new_path = '/finder'
+                        if (('reserve' in hostname or 'reserve' in path) and not path.startswith('/reserve')):
+                            new_path = '/reserve'
+
+                        if new_host != hostname or new_path != path:
+                            netloc = f"{new_host}:{port}" if port else new_host
+                            fallback_address = urlunparse((scheme, netloc, new_path, '', '', ''))
+                            card = await A2ACardResolver(client, fallback_address).get_agent_card()
+                            try:
+                                card.url = address
+                            except Exception:
+                                pass
+                            remote_connection = RemoteAgentConnections(
+                                agent_card=card, agent_url=fallback_address
+                            )
+                            self.remote_agent_connections[card.name] = remote_connection
+                            self.cards[card.name] = card
+                            continue
+                        print(
+                            f'ERROR: Failed to initialize connection for {address}: {e}'
+                        )
+                    except Exception as e2:
+                        print(
+                            f'ERROR: Failed to initialize connection for {address} with fallback: {e2}'
+                        )
 
         # Populate self.agents using the logic from original __init__ (via list_remote_agents)
         agent_info = []
@@ -119,10 +203,42 @@ class RoutingAgent:
             for address in self.remote_agent_addresses:
                 try:
                     card = await A2ACardResolver(client, address).get_agent_card()
+                    try:
+                        card.url = address
+                    except Exception:
+                        pass
                     self.remote_agent_connections[card.name] = RemoteAgentConnections(
                         agent_card=card, agent_url=address
                     )
                     self.cards[card.name] = card
+                    continue
+                except Exception:
+                    pass
+                # Retry with .localhost rewrite if applicable
+                try:
+                    parsed = urlparse(address if '://' in address else f'http://{address}')
+                    hostname = parsed.hostname or ''
+                    port = parsed.port
+                    scheme = parsed.scheme or 'http'
+                    path = parsed.path or '/'
+                    new_host = 'localhost' if hostname.endswith('.localhost') else hostname
+                    new_path = path
+                    if (('finder' in hostname or 'finder' in path) and not path.startswith('/finder')):
+                        new_path = '/finder'
+                    if (('reserve' in hostname or 'reserve' in path) and not path.startswith('/reserve')):
+                        new_path = '/reserve'
+                    if new_host != hostname or new_path != path:
+                        netloc = f"{new_host}:{port}" if port else new_host
+                        fallback_address = urlunparse((scheme, netloc, new_path, '', '', ''))
+                        card = await A2ACardResolver(client, fallback_address).get_agent_card()
+                        try:
+                            card.url = address
+                        except Exception:
+                            pass
+                        self.remote_agent_connections[card.name] = RemoteAgentConnections(
+                            agent_card=card, agent_url=fallback_address
+                        )
+                        self.cards[card.name] = card
                 except Exception:
                     continue
         # Rebuild agents string
@@ -432,13 +548,49 @@ def _get_initialized_routing_agent_sync() -> RoutingAgent:
     """Synchronously creates and initializes the RoutingAgent."""
 
     async def _async_main() -> RoutingAgent:
+        # Prefer resolving domains from ERC-8004 Identity Registry, with env fallbacks
+        adapter = Erc8004Adapter()
+
+        def _domain_to_url_if_present(info: dict | None) -> str | None:
+            # Only build URL if registry returned a domain; no env/hardcoded fallback
+            try:
+                if info and isinstance(info, dict):
+                    dom = (info.get('domain') or '').strip()
+                    if dom:
+                        if dom.startswith('http://') or dom.startswith('https://'):
+                            return dom
+                        return f'http://{dom}'
+            except Exception:
+                return None
+            return None
+
+        finder_domain_hint = os.getenv('FINDER_DOMAIN', 'finder.localhost:10002')
+        reserve_domain_hint = os.getenv('RESERVE_DOMAIN', 'reserve.localhost:10002')
+
+        finder_info = None
+        reserve_info = None
+        try:
+            finder_info = adapter.get_agent_by_domain(finder_domain_hint)
+        except Exception:
+            finder_info = None
+        try:
+            reserve_info = adapter.get_agent_by_domain(reserve_domain_hint)
+        except Exception:
+            reserve_info = None
+
+        addresses: list[str] = []
+        finder_url = _domain_to_url_if_present(finder_info)
+        if finder_url:
+            addresses.append(finder_url)
+        reserve_url = _domain_to_url_if_present(reserve_info)
+        if reserve_url:
+            addresses.append(reserve_url)
+        # Weather remains always available via env or default
+        weather_url = os.getenv('WEA_AGENT_URL', 'http://localhost:10001')
+        addresses.append(weather_url)
+
         routing_agent_instance = await RoutingAgent.create(
-            remote_agent_addresses=[
-                # Path-based routing to avoid DNS reliance
-                os.getenv('AIR_AGENT_URL', 'http://localhost:10002/finder'),
-                os.getenv('RES_AGENT_URL', 'http://localhost:10002/reserve'),
-                os.getenv('WEA_AGENT_URL', 'http://localhost:10001'),
-            ]
+            remote_agent_addresses=addresses
         )
         return routing_agent_instance
 
