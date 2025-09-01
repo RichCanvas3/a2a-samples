@@ -33,7 +33,8 @@ load_dotenv()
 SYSTEM_PROMPT = (
     "You are an expert Routing Delegator. Your job is to route user requests "
     "to remote agents using the send_message tool, and then present the remote "
-    "agent's result to the user. Rely on tools only; do not fabricate results."
+    "agent's result to the user. Rely on tools only; do not fabricate results. "
+    "If the user wants to submit feedback after a reservation, use the leave_feedback tool."
 )
 
 
@@ -73,6 +74,10 @@ class RoutingAgent:
         self.cards: dict[str, AgentCard] = {}
         self.agents: str = ''
         self.remote_agent_addresses: list[str] = []
+        self.feedback_records: list[dict[str, Any]] = []
+        self.authorized_feedback_agent_ids: set[int] = set()
+        self.authorized_feedback_agent_addr_by_id: dict[int, str] = {}
+        self.authorized_feedback_auth_id_by_target_id: dict[int, str] = {}
 
     async def _async_init_components(
         self, remote_agent_addresses: list[str]
@@ -185,7 +190,7 @@ class RoutingAgent:
                     except Exception as e2:
                         print(
                             f'ERROR: Failed to initialize connection for {address} with fallback: {e2}'
-                        )
+                    )
 
         # Populate self.agents using the logic from original __init__ (via list_remote_agents)
         agent_info = []
@@ -342,6 +347,181 @@ class RoutingAgent:
             )
         return remote_agent_info
 
+    async def _authorize_feedback(self, client_agent_name: str, target_agent_name: str) -> dict[str, Any]:
+        """Call acceptFeedback(client_agent_id, target_agent_id) in reputation registry.
+
+        Stores the authorized client's address in memory for FeedbackAuthID in exports.
+        """
+        # Resolve names to registry ids
+        target_resolved = self._resolve_agent_name(target_agent_name) or ''
+        is_reserve = 'reserve' in target_resolved.lower()
+        target_domain_env = 'RESERVE_DOMAIN' if is_reserve else 'FINDER_DOMAIN'
+        target_domain = os.getenv(target_domain_env, 'reserve.localhost:10002' if is_reserve else 'finder.localhost:10002')
+
+        adapter = Erc8004Adapter()
+        target_info = adapter.get_agent_by_domain(target_domain)
+        if not target_info or not target_info.get('agent_id'):
+            return {'status': 'error', 'message': f'Could not resolve target agent {target_agent_name}'}
+        target_id = int(target_info['agent_id'])
+
+        # Client (assistant) id: assume assistant domain is configured
+        client_domain = os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT') or os.getenv('ERC8004_AGENT_DOMAIN') or 'assistant.localhost:8083'
+        client_info = adapter.get_agent_by_domain(client_domain)
+        if not client_info or not client_info.get('agent_id'):
+            return {'status': 'error', 'message': f'Could not resolve client agent {client_agent_name}'}
+        client_id = int(client_info['agent_id'])
+
+        # Execute authorization tx signed by the SERVER (Finder/Reserve) key via adapter
+        # No user-involved steps; adapter handles acceptFeedback and returns FeedbackAuthID
+        assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+        auth_result = adapter.authorize_feedback_from_client(
+            client_agent_id=client_id,
+            server_agent_id=target_id,
+            signing_private_key=assistant_pk,
+        )
+        if not auth_result:
+            return {'status': 'error', 'message': 'Authorization transaction failed.'}
+
+        # Save mapping for FeedbackAuthID (store target id -> assistant address)
+        try:
+            self.authorized_feedback_agent_ids.add(target_id)
+            client_addr = auth_result.get('client_address') or client_info.get('address', '')
+            if not client_addr:
+                # Derive from assistant signing key if available
+                pk_env = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+                if pk_env:
+                    try:
+                        from eth_account import Account  # type: ignore
+                        client_addr = Account.from_key(pk_env).address
+                    except Exception:
+                        client_addr = ''
+            if client_addr:
+                self.authorized_feedback_agent_addr_by_id[target_id] = client_addr
+            # Persist event-provided FeedbackAuthID if present
+            if auth_result.get('feedback_auth_id'):
+                self.authorized_feedback_auth_id_by_target_id[target_id] = str(auth_result['feedback_auth_id'])
+        except Exception:
+            pass
+
+        result = {
+            'status': 'ok',
+            'clientAgentId': client_id,
+            'targetAgentId': target_id,
+            'txHash': auth_result.get('tx_hash'),
+        }
+        if auth_result.get('feedback_auth_id'):
+            result['FeedbackAuthID'] = auth_result['feedback_auth_id']
+        return result
+    async def submit_feedback(self, agent_name: str, rating: int, comment: str, state: Dict[str, Any]) -> dict[str, Any]:
+        """Submit feedback for an agent via ERC-8004 ReputationRegistry.
+
+        agent_name should match a known agent (Finder/Reserve). Rating 1-5.
+        """
+        # Determine variant and resolve domain
+        resolved_name = self._resolve_agent_name(agent_name) or ''
+        is_reserve = 'reserve' in resolved_name.lower()
+        domain_env = 'RESERVE_DOMAIN' if is_reserve else 'FINDER_DOMAIN'
+        fallback_domain = 'reserve.localhost:10002' if is_reserve else 'finder.localhost:10002'
+        domain = os.getenv(domain_env, fallback_domain)
+
+        adapter = Erc8004Adapter()
+        info = adapter.get_agent_by_domain(domain)
+        if not info or not info.get('agent_id'):
+            return {
+                'status': 'error',
+                'message': f'Could not resolve agent by domain {domain} for feedback.'
+            }
+        try:
+            agent_id = int(info['agent_id'])
+        except Exception:
+            return {'status': 'error', 'message': 'Invalid agent id from registry.'}
+
+        # Clamp rating to 1..5
+        try:
+            rating_int = max(1, min(5, int(rating)))
+        except Exception:
+            rating_int = 5
+
+        # Ensure we have authorization and a FeedbackAuthID
+        feedback_auth_id: str | None = None
+        if agent_id in self.authorized_feedback_auth_id_by_target_id:
+            feedback_auth_id = self.authorized_feedback_auth_id_by_target_id.get(agent_id)
+        else:
+            try:
+                # Resolve assistant client id
+                client_domain = (
+                    os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
+                    or os.getenv('ERC8004_AGENT_DOMAIN')
+                    or 'assistant.localhost:8083'
+                )
+                client_info = adapter.get_agent_by_domain(client_domain)
+                if client_info and client_info.get('agent_id'):
+                    # Call acceptFeedback with server=target_id (reserve/finder), client=assistant
+                    assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+                    auth_res = adapter.authorize_feedback_from_client(
+                        client_agent_id=int(client_info['agent_id']),
+                        server_agent_id=agent_id,
+                        signing_private_key=assistant_pk,
+                    )
+                    if auth_res and auth_res.get('feedback_auth_id'):
+                        feedback_auth_id = str(auth_res['feedback_auth_id'])
+                        self.authorized_feedback_auth_id_by_target_id[agent_id] = feedback_auth_id
+                        # Also keep client address for fallback display
+                        client_addr = auth_res.get('client_address') or client_info.get('address', '')
+                        if not client_addr and assistant_pk:
+                            try:
+                                from eth_account import Account  # type: ignore
+                                client_addr = Account.from_key(assistant_pk).address
+                            except Exception:
+                                client_addr = ''
+                        if client_addr:
+                            self.authorized_feedback_agent_addr_by_id[agent_id] = client_addr
+                        self.authorized_feedback_agent_ids.add(agent_id)
+            except Exception:
+                pass
+
+        # Do NOT write feedback on-chain. Only pre-authorization is on-chain.
+        # Feedback is stored client-side and exposed via feedback.json.
+        # Build feedback record for export endpoint
+        try:
+            chain_id = os.getenv('ERC8004_CHAIN_ID', '11155111')
+            # Prefer event-provided FeedbackAuthID; fallback to CAIP-10 with client address if available
+            if not feedback_auth_id and agent_id in self.authorized_feedback_agent_ids:
+                auth_addr = self.authorized_feedback_agent_addr_by_id.get(agent_id, '')
+                if auth_addr:
+                    feedback_auth_id = f'eip155:{chain_id}:{auth_addr}'
+            # Pull task/context ids if available
+            task_ids_by_agent = state.get('task_ids_by_agent', {}) if isinstance(state.get('task_ids_by_agent'), dict) else {}
+            context_ids_by_agent = state.get('context_ids_by_agent', {}) if isinstance(state.get('context_ids_by_agent'), dict) else {}
+            task_id = task_ids_by_agent.get(agent_name) or task_ids_by_agent.get(resolved_name) or ''
+            context_id = context_ids_by_agent.get(agent_name) or context_ids_by_agent.get(resolved_name) or ''
+            agent_skill_id = ('reserve:v1' if is_reserve else 'finder:v1')
+            rating_pct = int(max(0, min(100, rating_int * 20)))
+            record: Dict[str, Any] = {
+                'FeedbackAuthID': feedback_auth_id,
+                'AgentSkillId': agent_skill_id,
+                'TaskId': task_id,
+                'contextId': context_id,
+                'Rating': rating_pct,
+                'Domain': domain,
+                'Data': {'notes': str(comment)},
+            }
+            # Optionally include ProofOfPayment if caller provided one in state/env
+            proof_tx = state.get('payment_tx_hash') if isinstance(state, dict) else None
+            proof_tx = proof_tx or os.getenv('FEEDBACK_PAYMENT_TX')
+            if proof_tx:
+                record['ProofOfPayment'] = {'txHash': str(proof_tx)}
+            self.feedback_records.append(record)
+        except Exception:
+            pass
+        return {
+            'status': 'ok',
+            'agentId': agent_id,
+            'domain': domain,
+            'rating': rating_int,
+            'comment': str(comment),
+        }
+
     async def send_message(self, agent_name: str, task: str, state: Dict[str, Any]):
         """Sends a task to remote seller agent.
 
@@ -467,7 +647,50 @@ class RoutingAgent:
                         'required': ['agent_name', 'task'],
                     },
                 },
-            }
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'leave_feedback',
+                    'description': 'Leave feedback for an agent via ERC-8004 reputation registry (rating 1-5).',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'agent_name': {
+                                'type': 'string',
+                                'description': 'Name of the agent to leave feedback for',
+                                'enum': allowed_agents,
+                            },
+                            'rating': {'type': 'integer', 'minimum': 1, 'maximum': 5},
+                            'comment': {'type': 'string'},
+                        },
+                        'required': ['agent_name', 'rating', 'comment'],
+                    },
+                },
+            },
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'authorize_feedback',
+                    'description': 'Authorize a client (assistant) agent to provide feedback for a target agent.',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'client_agent_name': {
+                                'type': 'string',
+                                'description': 'Name of the client agent (Assistant) providing feedback',
+                                'enum': allowed_agents + ['assistant'],
+                            },
+                            'target_agent_name': {
+                                'type': 'string',
+                                'description': 'Name of the target agent (Finder/Reserve) to authorize feedback for',
+                                'enum': allowed_agents,
+                            },
+                        },
+                        'required': ['client_agent_name', 'target_agent_name'],
+                    },
+                },
+            },
         ]
 
         system_prompt = self._build_system_prompt(state)
@@ -525,6 +748,49 @@ class RoutingAgent:
                         yield {'type': 'tool_response', 'name': func_name, 'content': result_json}
                     except Exception as e:
                         error_msg = f"Routing error: {type(e).__name__}: {e} | Allowed agents: {allowed_agents}"
+                        messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tc.id,
+                            'name': func_name,
+                            'content': error_msg,
+                        })
+                        yield {'type': 'tool_response', 'name': func_name, 'content': {'error': error_msg}}
+                elif func_name == 'leave_feedback':
+                    agent_name = args.get('agent_name')
+                    rating = args.get('rating', 5)
+                    comment = args.get('comment', '')
+                    try:
+                        result = await self.submit_feedback(agent_name, rating, comment, state)
+                        messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tc.id,
+                            'name': func_name,
+                            'content': json.dumps(result),
+                        })
+                        yield {'type': 'tool_response', 'name': func_name, 'content': result}
+                    except Exception as e:
+                        error_msg = f"Feedback error: {type(e).__name__}: {e}"
+                        messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tc.id,
+                            'name': func_name,
+                            'content': error_msg,
+                        })
+                        yield {'type': 'tool_response', 'name': func_name, 'content': {'error': error_msg}}
+                elif func_name == 'authorize_feedback':
+                    client_agent_name = args.get('client_agent_name')
+                    target_agent_name = args.get('target_agent_name')
+                    try:
+                        result = await self._authorize_feedback(client_agent_name, target_agent_name)
+                        messages.append({
+                            'role': 'tool',
+                            'tool_call_id': tc.id,
+                            'name': func_name,
+                            'content': json.dumps(result),
+                        })
+                        yield {'type': 'tool_response', 'name': func_name, 'content': result}
+                    except Exception as e:
+                        error_msg = f"Authorize feedback error: {type(e).__name__}: {e}"
                         messages.append({
                             'role': 'tool',
                             'tool_call_id': tc.id,

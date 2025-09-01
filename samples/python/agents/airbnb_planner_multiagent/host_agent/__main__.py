@@ -119,6 +119,7 @@ async def main():
             tags=['finder', 'reserve', 'weather'],
             examples=['Find a place in LA and reserve it, then check weather'],
         )
+        # Base card
         card = AgentCard(
             name='assistant',
             description='Travel assistant for finding and booking stays and checking weather',
@@ -129,7 +130,43 @@ async def main():
             capabilities=capabilities,
             skills=[skill],
         )
-        return card.model_dump(exclude_none=True)
+        card_dict = card.model_dump(exclude_none=True)
+
+        # Augment with ERC-8004 registration and FeedbackDataURI
+        try:
+            if os.getenv('ERC8004_CARD_LOOKUP', 'false').lower() == 'true':
+                adapter = Erc8004Adapter()
+                domain = os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT') or os.getenv('ERC8004_AGENT_DOMAIN') or 'assistant.localhost:8083'
+                info = adapter.get_agent_by_domain(domain)
+                if info and info.get('agent_id') and info.get('address'):
+                    chain_id = os.getenv('ERC8004_CHAIN_ID', '11155111')
+                    caip10 = f"eip155:{chain_id}:{info['address']}"
+                    # Optional ownership signature over domain
+                    signature_hex = None
+                    private_key = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+                    if private_key:
+                        try:
+                            from eth_account import Account
+                            from eth_account.messages import encode_defunct
+
+                            msg = encode_defunct(text=domain)
+                            signed = Account.sign_message(msg, private_key=private_key)
+                            signature_hex = signed.signature.hex()
+                        except Exception:
+                            signature_hex = None
+                    reg = {
+                        'agentId': int(info['agent_id']),
+                        'agentAddress': caip10,
+                    }
+                    if signature_hex:
+                        reg['signature'] = signature_hex
+                    card_dict['registrations'] = [reg]
+            # Feedback export URI (always present)
+            card_dict['FeedbackDataURI'] = f"{app_url}/.well-known/feedback.json"
+        except Exception:
+            pass
+
+        return card_dict
 
     @app.get('/.well-known/agent-ids')
     def agent_ids():
@@ -139,11 +176,21 @@ async def main():
         reserve = adapter.get_agent_by_domain(os.getenv('RESERVE_DOMAIN', 'reserve.localhost:10002'))
         return {'finder': finder, 'reserve': reserve}
 
+    @app.get('/.well-known/feedback.json')
+    def feedback_json():
+        # Export in the requested format; gather from routing agent memory
+        try:
+            records = routing_agent.feedback_records if hasattr(routing_agent, 'feedback_records') else []
+            return records
+        except Exception:
+            return []
+
     # Redirect root to the mounted Gradio UI path to avoid double-slash ('//') redirects
     @app.get('/')
     def root_redirect():
         return RedirectResponse(url='/ui')
 
+    # Queue not supported in this Gradio version; leaving disabled
     gr.mount_gradio_app(app, demo, path='/ui')
 
     config = uvicorn.Config(app=app, host='0.0.0.0', port=8083, log_level='info')

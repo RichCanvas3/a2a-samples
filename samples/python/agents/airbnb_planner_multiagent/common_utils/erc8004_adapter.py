@@ -57,6 +57,7 @@ class Erc8004Adapter:
 
         # Lazy-loaded contracts
         self._identity_contract = None
+        self._reputation_contract = None
         # Attempt to hydrate contract addresses from deployment.json if env not set
         if self.enabled and not self.identity_registry:
             self._load_contract_addresses_from_deployment()
@@ -64,7 +65,7 @@ class Erc8004Adapter:
     def is_enabled(self) -> bool:
         return self.enabled
 
-    def ensure_identity(self, agent_name: str, agent_domain: Optional[str] = None) -> None:
+    def ensure_identity(self, agent_name: str, agent_domain: Optional[str] = None, signing_private_key: Optional[str] = None) -> None:
         """Ensure this agent has an identity.
 
         If ERC-8004 is enabled and registry is configured, attempts to register
@@ -87,7 +88,10 @@ class Erc8004Adapter:
             identity = self._get_identity_contract()
 
             if identity is not None:
-                acct_addr = self._w3.eth.account.from_key(self.private_key).address
+                if not signing_private_key:
+                    logger.info('ERC-8004: ensure_identity skipped (no signing key provided).')
+                    return
+                acct_addr = self._w3.eth.account.from_key(signing_private_key).address
                 logger.info('find agent by acct_addr: %s', acct_addr)
                 # Pre-check: resolve existing registration by address
                 try:
@@ -120,7 +124,7 @@ class Erc8004Adapter:
                         'value': value,
                     }
                 )
-                signed = self._w3.eth.account.sign_transaction(tx, self.private_key)
+                signed = self._w3.eth.account.sign_transaction(tx, signing_private_key)
                 tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
                 try:
                     receipt = self._w3.eth.wait_for_transaction_receipt(
@@ -180,7 +184,10 @@ class Erc8004Adapter:
                 }
             ]
             contract = self._w3.eth.contract(address=self.identity_registry, abi=abi_min)
-            acct_addr = self._w3.eth.account.from_key(self.private_key).address
+            if not signing_private_key:
+                logger.info('ERC-8004: ensure_identity skipped (no signing key provided).')
+                return
+            acct_addr = self._w3.eth.account.from_key(signing_private_key).address
             tx = contract.functions.register(agent_name).build_transaction(
                 {
                     'from': acct_addr,
@@ -188,7 +195,7 @@ class Erc8004Adapter:
                     'gas': 300000,
                 }
             )
-            signed = self._w3.eth.account.sign_transaction(tx, self.private_key)
+            signed = self._w3.eth.account.sign_transaction(tx, signing_private_key)
             tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
             try:
                 receipt = self._w3.eth.wait_for_transaction_receipt(
@@ -300,6 +307,24 @@ class Erc8004Adapter:
             logger.debug('ERC-8004: could not init IdentityRegistry contract: %s', e)
             return None
 
+    def _get_reputation_contract(self):
+        logger.debug('ERC-8004: get reputation contract: %s', self.reputation_registry)
+        if self._reputation_contract is not None:
+            return self._reputation_contract
+        if not (self._w3 and self.reputation_registry):
+            logger.debug('ERC-8004: no web3 or reputation registry')
+            return None
+        abi = self._load_contract_abi('ReputationRegistry')
+        if not abi:
+            logger.debug('ERC-8004: no abi reputation registry')
+            return None
+        try:
+            self._reputation_contract = self._w3.eth.contract(address=self.reputation_registry, abi=abi)
+            return self._reputation_contract
+        except Exception as e:
+            logger.debug('ERC-8004: could not init ReputationRegistry contract: %s', e)
+            return None
+
     def record_reservation(self, payload: dict[str, Any]) -> None:
         """Record a reservation action for reputation/audit.
 
@@ -313,6 +338,300 @@ class Erc8004Adapter:
             payload,
             self.reputation_registry,
         )
+
+    def record_feedback(
+        self,
+        agent_id: int,
+        rating: int,
+        comment: str,
+        feedback_auth_id: Optional[str] = None,
+        data: Optional[dict] = None,
+        signing_private_key: Optional[str] = None,
+    ) -> Optional[str]:
+        """Submit feedback to the reputation registry if configured.
+
+        Tries several function signatures:
+        - addFeedbackWithAuth(feedbackAuthId, agentId, rating, comment, data?)
+        - addFeedback(feedbackAuthId, agentId, rating, comment)
+        - submitFeedback(feedbackAuthId, agentId, rating, comment)
+        - recordFeedback(feedbackAuthId, agentId, rating, comment)
+        - addFeedback(agentId, rating, comment)
+        - submitFeedback(agentId, rating, comment)
+        - recordFeedback(agentId, rating, comment)
+
+        Returns tx hash hex on success, else None.
+        """
+        if not self.enabled:
+            return None
+        if not (self._w3 and self.reputation_registry):
+            logger.info('ERC-8004: record_feedback skipped (missing Web3 or reputation registry).')
+            return None
+
+        contract = self._get_reputation_contract()
+        if contract is None:
+            logger.info('ERC-8004: record_feedback skipped (no reputation contract).')
+            return None
+
+        try:
+            if not signing_private_key:
+                logger.info('ERC-8004: record_feedback skipped (no signing key provided).')
+                return None
+            acct_addr = self._w3.eth.account.from_key(signing_private_key).address
+
+            # Prepare candidate calls (name, args)
+            candidate_calls = []
+            if feedback_auth_id is not None:
+                candidate_calls.extend([
+                    ('addFeedbackWithAuth', (feedback_auth_id, int(agent_id), int(rating), str(comment), data or {})),
+                    ('addFeedbackWithAuth', (feedback_auth_id, int(agent_id), int(rating), str(comment))),
+                    ('addFeedback', (feedback_auth_id, int(agent_id), int(rating), str(comment))),
+                    ('submitFeedback', (feedback_auth_id, int(agent_id), int(rating), str(comment))),
+                    ('recordFeedback', (feedback_auth_id, int(agent_id), int(rating), str(comment))),
+                ])
+            # Without auth id
+            candidate_calls.extend([
+                ('addFeedback', (int(agent_id), int(rating), str(comment))),
+                ('submitFeedback', (int(agent_id), int(rating), str(comment))),
+                ('recordFeedback', (int(agent_id), int(rating), str(comment))),
+            ])
+
+            fn = None
+            for fn_name, args in candidate_calls:
+                try:
+                    fn = getattr(contract.functions, fn_name)(*args)
+                    break
+                except Exception:
+                    fn = None
+            if fn is None:
+                logger.info('ERC-8004: Feedback function not found in reputation registry ABI.')
+                return None
+
+            gas_est = None
+            try:
+                gas_est = fn.estimate_gas({'from': acct_addr})
+            except Exception:
+                gas_est = 200000
+            tx = fn.build_transaction(
+                {
+                    'from': acct_addr,
+                    'nonce': self._w3.eth.get_transaction_count(acct_addr, 'pending'),
+                    'gas': int(gas_est * 1.2),
+                    'gasPrice': self._w3.eth.gas_price,
+                }
+            )
+            signed = self._w3.eth.account.sign_transaction(tx, signing_private_key)
+            tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
+            try:
+                receipt = self._w3.eth.wait_for_transaction_receipt(
+                    tx_hash, timeout=self._tx_timeout_sec
+                )
+            except TimeExhausted:
+                receipt = self._w3.eth.get_transaction_receipt(tx_hash)
+            logger.info('ERC-8004: feedback tx mined: %s (status=%s)', tx_hash.hex(), getattr(receipt, 'status', None))
+            if getattr(receipt, 'status', 0) != 1:
+                self._log_tx_failure_details(tx_hash, receipt)
+                return None
+            return tx_hash.hex()
+        except Exception as e:
+            logger.warning('ERC-8004: record_feedback failed: %s', e)
+            return None
+
+    def authorize_feedback_from_client(
+        self,
+        client_agent_id: int,
+        server_agent_id: int,
+        server_agent_domain: Optional[str] = None,
+        signing_private_key: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Authorize a client agent to provide feedback for this server agent.
+
+        Returns details dict on success: {tx_hash, feedback_auth_id?, client_agent_id, server_agent_id, client_address?}
+        Returns None on no-op/failure.
+        """
+        if not self.enabled:
+            return None
+        if not (self._w3 and self.reputation_registry):
+            logger.info('ERC-8004: authorize_feedback skipped (missing Web3 or reputation registry).')
+            return None
+
+        # Ensure we know our own agent_id (only if caller didn't provide one)
+        # Caller must provide the server agent id explicitly
+        if server_agent_id is None:  # type: ignore[unreachable]
+            logger.info('ERC-8004: authorize_feedback skipped (server agent_id not provided).')
+            return None
+
+        contract = self._get_reputation_contract()
+        if contract is None:
+            logger.info('ERC-8004: authorize_feedback skipped (no reputation contract).')
+            return None
+
+        try:
+            # Always sign with the provided Assistant key per requirement
+            pk = signing_private_key
+            if not pk:
+                logger.info('ERC-8004: authorize_feedback skipped (no private key).')
+                return None
+            acct_addr = self._w3.eth.account.from_key(pk).address
+            server_agent_id_int = int(server_agent_id)
+            client_agent_id_int = int(client_agent_id)
+
+            # Try multiple function names for compatibility
+            fn = None
+            logger.info('ERC-8004: authorize_feedback client_agent_id: %s, server_agent_id: %s', client_agent_id_int, server_agent_id_int)
+            for fn_name in ('acceptFeedback', 'authorizeFeedback', 'allowFeedback'):
+                try:
+                    fn = getattr(contract.functions, fn_name)(client_agent_id_int, server_agent_id_int)
+                    break
+                except Exception:
+                    fn = None
+            if fn is None:
+                logger.info('ERC-8004: Feedback authorization function not found in ABI.')
+                return None
+
+            gas_est = None
+            try:
+                gas_est = fn.estimate_gas({'from': acct_addr})
+            except Exception:
+                gas_est = 100000
+            tx = fn.build_transaction(
+                {
+                    'from': acct_addr,
+                    'nonce': self._w3.eth.get_transaction_count(acct_addr, 'pending'),
+                    'gas': int(gas_est * 1.2),
+                    'gasPrice': self._w3.eth.gas_price,
+                }
+            )
+            signed = self._w3.eth.account.sign_transaction(tx, pk)
+            tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
+            try:
+                receipt = self._w3.eth.wait_for_transaction_receipt(
+                    tx_hash, timeout=self._tx_timeout_sec
+                )
+            except TimeExhausted:
+                receipt = self._w3.eth.get_transaction_receipt(tx_hash)
+            logger.info('ERC-8004: authorize feedback tx mined: %s (status=%s)', tx_hash.hex(), getattr(receipt, 'status', None))
+            if getattr(receipt, 'status', 0) != 1:
+                self._log_tx_failure_details(tx_hash, receipt)
+                return None
+            # Extract FeedbackAuthID from events if available
+            def _to_0x(val):
+                try:
+                    if val is None:
+                        return None
+                    # HexBytes or bytes-like
+                    if hasattr(val, 'hex'):
+                        h = val.hex()
+                        return h if h.startswith('0x') else f'0x{h}'
+                    if isinstance(val, (bytes, bytearray)):
+                        import binascii
+                        return '0x' + binascii.hexlify(val).decode('utf-8')
+                    # Strings: ensure 0x prefix if looks like hex
+                    if isinstance(val, str):
+                        return val if val.startswith('0x') else val
+                    return str(val)
+                except Exception:
+                    return None
+
+            feedback_auth_id = None
+            matched_event = None
+            try:
+                for evt_name in ('AuthFeedback', 'FeedbackAuthorized', 'FeedbackAuth'):
+                    try:
+                        ev = getattr(self._get_reputation_contract().events, evt_name)()
+                        logs = ev.process_receipt(receipt)
+                        if not logs:
+                            continue
+                        args = logs[0].get('args', {}) or {}
+                        # Search args case-insensitively for feedbackAuthId-like key
+                        candidate = None
+                        for k, v in args.items():
+                            kl = str(k).lower()
+                            if kl in ('feedbackauthid', 'authid', 'feedback_auth_id', 'feedbackauth'):
+                                candidate = v
+                                break
+                        if candidate is None:
+                            # Also try known keys directly
+                            candidate = args.get('feedbackAuthId') or args.get('authId') or args.get('FeedbackAuthID')
+                        norm = _to_0x(candidate)
+                        if norm:
+                            feedback_auth_id = norm
+                            matched_event = evt_name
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # If still missing, try raw log topic decoding for AuthFeedback(uint256,uint256,bytes32)
+            if feedback_auth_id is None:
+                try:
+                    expected_topic0 = Web3.keccak(text='AuthFeedback(uint256,uint256,bytes32)').hex()
+                    rep_addr = (self.reputation_registry or '').lower()
+                    for lg in getattr(receipt, 'logs', []) or []:
+                        try:
+                            if rep_addr and str(lg.get('address', '')).lower() != rep_addr:
+                                continue
+                            topics = lg.get('topics') or []
+                            if len(topics) >= 4:
+                                t0 = topics[0].hex() if hasattr(topics[0], 'hex') else str(topics[0])
+                                if t0.lower() == expected_topic0.lower():
+                                    t3 = topics[3]
+                                    if hasattr(t3, 'hex'):
+                                        feedback_auth_id = t3.hex()
+                                    else:
+                                        feedback_auth_id = str(t3)
+                                    matched_event = 'AuthFeedback(topic)'
+                                    break
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+            # Final fallback: query the contract view getFeedbackAuthId(client, server)
+            if feedback_auth_id is None:
+                try:
+                    contract = self._get_reputation_contract()
+                    if contract is not None and hasattr(contract.functions, 'getFeedbackAuthId'):
+                        fid = contract.functions.getFeedbackAuthId(client_agent_id_int, server_agent_id_int).call()
+                        # fid may be bytes32/HexBytes
+                        if hasattr(fid, 'hex'):
+                            fid_hex = fid.hex()
+                            feedback_auth_id = fid_hex if fid_hex.startswith('0x') else f'0x{fid_hex}'
+                        else:
+                            feedback_auth_id = str(fid)
+                        matched_event = 'getFeedbackAuthId(view)'
+                except Exception as e:
+                    logger.debug('ERC-8004: getFeedbackAuthId view failed: %s', e)
+
+            result: dict[str, Any] = {
+                'tx_hash': tx_hash.hex(),
+                'client_agent_id': client_agent_id_int,
+                'server_agent_id': server_agent_id_int,
+            }
+            # Helpful: include client address if we can resolve it by id
+            try:
+                identity = self._get_identity_contract()
+                if identity is not None:
+                    # Attempt resolveById if available; otherwise ignore
+                    if hasattr(identity.functions, 'resolveById'):
+                        info = identity.functions.resolveById(client_agent_id_int).call()
+                        # Expected tuple: (id, domain, address)
+                        if info and len(info) >= 3:
+                            result['client_address'] = info[2]
+            except Exception:
+                pass
+            if feedback_auth_id:
+                logger.info('ERC-8004: FeedbackAuthID resolved from event %s: %s', matched_event, feedback_auth_id)
+            else:
+                # Fallback to tx hash if event didn't include an id
+                feedback_auth_id = tx_hash.hex()
+                logger.info('ERC-8004: FeedbackAuthID falling back to tx hash: %s', feedback_auth_id)
+            if feedback_auth_id:
+                result['feedback_auth_id'] = str(feedback_auth_id)
+            return result
+        except Exception as e:
+            logger.warning('ERC-8004: authorize_feedback failed: %s', e)
+            return None
 
     def get_agent_by_domain(self, domain: str) -> Optional[dict[str, Any]]:
         """Resolve agent info by domain.
