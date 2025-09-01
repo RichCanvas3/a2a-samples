@@ -18,12 +18,14 @@ from a2a.types import (
     AgentCard,
     AgentSkill,
 )
+# Ensure intra-package imports work when run as a script
+if __package__ is None or __package__ == '':
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from agent_executor import (
     AirbnbAgentExecutor,
 )
-from airbnb_agent import (
-    AirbnbAgent,
-)
+from base_agent import BaseAgent
 from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from starlette.applications import Starlette
@@ -265,8 +267,8 @@ def get_agent_card(host: str, port: int, variant: str):
         description=agent_desc,
         url=app_url,
         version='1.0.0',
-        default_input_modes=AirbnbAgent.SUPPORTED_CONTENT_TYPES,
-        default_output_modes=AirbnbAgent.SUPPORTED_CONTENT_TYPES,
+        default_input_modes=BaseAgent.SUPPORTED_CONTENT_TYPES,
+        default_output_modes=BaseAgent.SUPPORTED_CONTENT_TYPES,
         capabilities=capabilities,
         skills=[skill],
     )

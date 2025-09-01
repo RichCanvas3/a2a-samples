@@ -15,6 +15,7 @@ dependencies = [
     "a2a-sdk>=0.3.0",
     "litellm",
     "openai>=1.51.0",
+    "web3>=6.19.0",
 ]
 
 [tool.uv.sources]

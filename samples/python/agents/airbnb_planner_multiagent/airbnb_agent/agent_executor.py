@@ -12,9 +12,8 @@ from a2a.types import (
     TaskStatusUpdateEvent,
 )
 from a2a.utils import new_agent_text_message, new_task, new_text_artifact
-from airbnb_agent import (
-    AirbnbAgent,
-)
+from finder_agent import FinderAgent
+from reserve_agent import ReserveAgent
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,9 @@ class AirbnbAgentExecutor(AgentExecutor):
         logger.info(
             f'Initializing AirbnbAgentExecutor with {len(mcp_tools) if mcp_tools else "no"} MCP tools.'
         )
-        self.agent = AirbnbAgent(mcp_tools=mcp_tools, variant=variant)
+        self.agent = (
+            ReserveAgent(mcp_tools) if variant == 'reserve' else FinderAgent(mcp_tools)
+        )
 
     @override
     async def execute(

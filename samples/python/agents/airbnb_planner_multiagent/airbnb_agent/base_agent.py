@@ -2,7 +2,6 @@
 # pylint: disable=logging-fstring-interpolation
 import logging
 import os
-import uuid
 
 from collections.abc import AsyncIterable
 from typing import Any, Literal
@@ -17,7 +16,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
-from langchain_core.tools import tool
+from erc8004_adapter import Erc8004Adapter
 
 
 logger = logging.getLogger(__name__)
@@ -34,30 +33,7 @@ class ResponseFormat(BaseModel):
     message: str
 
 
-class ReserveRequest(BaseModel):
-    """Structured input for making a reservation (mock)."""
-
-    listing_url: str
-    check_in: str
-    check_out: str
-    guests: int = 1
-
-
-@tool("reserve_listing", args_schema=ReserveRequest)
-def reserve_listing(listing_url: str, check_in: str, check_out: str, guests: int = 1) -> str:
-    """Reserve the specified Airbnb listing (mock). Provide listing_url, check_in (YYYY-MM-DD), check_out (YYYY-MM-DD), and guests."""
-    booking_id = uuid.uuid4().hex[:10]
-    return (
-        f"Reservation confirmed.\n"
-        f"Booking ID: {booking_id}\n"
-        f"Listing: {listing_url}\n"
-        f"Check-in: {check_in}\n"
-        f"Check-out: {check_out}\n"
-        f"Guests: {guests}"
-    )
-
-
-class AirbnbAgent:
+class BaseAgent:
     """Airbnb Agent Example."""
 
     SYSTEM_INSTRUCTION = """You are a specialized assistant for Airbnb accommodations. Your primary function is to utilize the provided tools to search for Airbnb listings and answer related questions. You must rely exclusively on these tools for information; do not invent listings or prices. Ensure that your Markdown-formatted response includes all relevant tool output, with particular emphasis on providing direct links to listings"""
@@ -70,14 +46,14 @@ class AirbnbAgent:
 
     SUPPORTED_CONTENT_TYPES = ['text', 'text/plain']
 
-    def __init__(self, mcp_tools: list[Any], variant: str = 'finder'):  # Modified to accept mcp_tools
+    def __init__(self, mcp_tools: list[Any], variant: str = 'finder'):
         """Initializes the Airbnb agent.
 
         Args:
             mcp_tools: A list of preloaded MCP (Model Context Protocol) tools.
             variant: Either 'finder' (search) or 'reserve' (booking-focused).
         """
-        logger.info('Initializing AirbnbAgent with preloaded MCP tools...')
+        logger.info('Initializing BaseAgent with preloaded MCP tools...')
         try:
             model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
             if not os.getenv('OPENAI_API_KEY'):
@@ -93,26 +69,36 @@ class AirbnbAgent:
 
         self.mcp_tools = mcp_tools
         if not self.mcp_tools:
-            raise ValueError('No MCP tools provided to AirbnbAgent')
+            raise ValueError('No MCP tools provided to BaseAgent')
 
-        # Variant-specific instruction augmentation
+        # Variant is kept for subclasses to customize behavior/prompts
         self.variant = variant
-        if self.variant == 'reserve':
-            self.SYSTEM_INSTRUCTION += (
-                "\n\nReservation mode: If the user asks to reserve one of the previously presented listings, "
-                "use the reserve_listing tool. Extract listing URL (or infer from context), check-in, check-out, and guests. "
-                "Confirm the reservation details in Markdown, including the booking ID returned by the tool."
+
+        # Initialize optional ERC-8004 adapter and ensure identity (no-op if disabled)
+        try:
+            # Variant-specific private key and domain
+            pk_env = 'ERC8004_PRIVATE_KEY_RESERVE' if self.variant == 'reserve' else 'ERC8004_PRIVATE_KEY_FINDER'
+            dom_env = 'ERC8004_AGENT_DOMAIN_RESERVE' if self.variant == 'reserve' else 'ERC8004_AGENT_DOMAIN_FINDER'
+            variant_pk = os.getenv(pk_env) or os.getenv('ERC8004_PRIVATE_KEY')
+            variant_domain = os.getenv(dom_env) or os.getenv('ERC8004_AGENT_DOMAIN') or os.getenv('APP_URL')
+            self.erc8004 = Erc8004Adapter(private_key=variant_pk)
+            self.erc8004.ensure_identity(
+                'Airbnb Agent - Reserve' if self.variant == 'reserve' else 'Airbnb Agent - Finder',
+                agent_domain=variant_domain,
             )
+        except Exception:
+            self.erc8004 = None
+
+    def get_tools(self) -> list[Any]:
+        """Return the tool list for this agent instance. Subclasses can extend."""
+        return list(self.mcp_tools)
 
     async def ainvoke(self, query: str, session_id: str) -> dict[str, Any]:
         logger.info(
             f"Airbnb.ainvoke called with query: '{query}', session_id: '{session_id}'"
         )
         try:
-            # Include local reserve tool in addition to MCP tools
-            tools = list(self.mcp_tools)
-            if 'reserve' in self.variant or 'finder' in self.variant:
-                tools.append(reserve_listing)
+            tools = self.get_tools()
 
             airbnb_agent_runnable = create_react_agent(
                 self.model,
@@ -295,13 +281,12 @@ class AirbnbAgent:
             'content': 'We are unable to process your request at the moment due to an unexpected response format. Please try again.',
         }
 
-    # stream method would also use self.mcp_tools if it similarly creates an agent instance
+    # stream method would also use tools from get_tools
     async def stream(self, query: str, session_id: str) -> AsyncIterable[Any]:
         logger.info(
-            f"AirbnbAgent.stream called with query: '{query}', sessionId: '{session_id}'"
+            f"BaseAgent.stream called with query: '{query}', sessionId: '{session_id}'"
         )
-        tools = list(self.mcp_tools)
-        tools.append(reserve_listing)
+        tools = self.get_tools()
         agent_runnable = create_react_agent(
             self.model,
             tools=tools,  # Preloaded tools + reserve tool
@@ -357,7 +342,7 @@ class AirbnbAgent:
 
         except Exception as e:
             logger.error(
-                f'Error during AirbnbAgent.stream for session {session_id}: {e}',
+                f'Error during BaseAgent.stream for session {session_id}: {e}',
                 exc_info=True,
             )
             yield {
@@ -365,3 +350,5 @@ class AirbnbAgent:
                 'require_user_input': False,
                 'content': f'An error occurred during streaming: {getattr(e, "message", str(e))}',
             }
+
+
