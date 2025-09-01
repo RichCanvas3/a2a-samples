@@ -7,6 +7,7 @@ from collections.abc import AsyncIterable
 from typing import Any, Literal
 
 import httpx
+import sys
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.runnables.config import (
@@ -16,7 +17,13 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel
-from erc8004_adapter import Erc8004Adapter
+
+try:
+    from common_utils.erc8004_adapter import Erc8004Adapter  
+except Exception:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from common_utils.erc8004_adapter import Erc8004Adapter  # type: ignore
 
 
 logger = logging.getLogger(__name__)

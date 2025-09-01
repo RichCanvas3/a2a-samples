@@ -4,7 +4,13 @@ from base_agent import BaseAgent
 from langchain_core.tools import tool
 from pydantic import BaseModel
 import uuid
-from erc8004_adapter import Erc8004Adapter
+import sys
+try:
+    from common_utils.erc8004_adapter import Erc8004Adapter  
+except Exception:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from common_utils.erc8004_adapter import Erc8004Adapter  # type: ignore
 
 
 class ReserveRequest(BaseModel):

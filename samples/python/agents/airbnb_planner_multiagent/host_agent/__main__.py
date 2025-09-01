@@ -10,11 +10,11 @@ import gradio as gr
 
 # Allow importing the ERC-8004 adapter from the sibling airbnb_agent package
 try:
-    from airbnb_agent.erc8004_adapter import Erc8004Adapter  # type: ignore
+    from common_utils.erc8004_adapter import Erc8004Adapter  
 except Exception:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from airbnb_agent.erc8004_adapter import Erc8004Adapter  # type: ignore
+    from common_utils.erc8004_adapter import Erc8004Adapter  # type: ignore
 
 from routing_agent import (
     root_agent as routing_agent,
