@@ -374,13 +374,10 @@ class RoutingAgent:
         # Execute authorization tx signed by the SERVER (Finder/Reserve) key via adapter
         # No user-involved steps; adapter handles acceptFeedback and returns FeedbackAuthID
         # Sign with the SERVER agent's key (Finder/Reserve), not the assistant's key
-        server_pk = (
-            os.getenv('ERC8004_PRIVATE_KEY_RESERVE') if is_reserve else os.getenv('ERC8004_PRIVATE_KEY_FINDER')
-        ) or os.getenv('ERC8004_PRIVATE_KEY')
-        auth_result = adapter.authorize_feedback_from_client(
+        feedback_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT')
+        auth_result = adapter.get_feedback_auth_id(
             client_agent_id=client_id,
             server_agent_id=target_id,
-            signing_private_key=server_pk,
         )
         if not auth_result:
             return {'status': 'error', 'message': 'Authorization transaction failed.'}
@@ -461,13 +458,9 @@ class RoutingAgent:
                 if client_info and client_info.get('agent_id'):
                     # Call acceptFeedback with server=target_id (reserve/finder), client=assistant
                     # Server key (Finder/Reserve)
-                    server_pk2 = (
-                        os.getenv('ERC8004_PRIVATE_KEY_RESERVE') if is_reserve else os.getenv('ERC8004_PRIVATE_KEY_FINDER')
-                    )
-                    auth_res = adapter.authorize_feedback_from_client(
+                    auth_res = adapter.get_feedback_auth_id(
                         client_agent_id=int(client_info['agent_id']),
-                        server_agent_id=agent_id,
-                        signing_private_key=server_pk2,
+                        server_agent_id=agent_id
                     )
                     if auth_res and auth_res.get('feedback_auth_id'):
                         feedback_auth_id = str(auth_res['feedback_auth_id'])
@@ -496,6 +489,21 @@ class RoutingAgent:
                 auth_addr = self.authorized_feedback_agent_addr_by_id.get(agent_id, '')
                 if auth_addr:
                     feedback_auth_id = f'eip155:{chain_id}:{auth_addr}'
+            # Final attempt: fetch via view getFeedbackAuthId(client=assistant, server=target)
+            if not feedback_auth_id:
+                try:
+                    client_domain = (
+                        os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
+                        or os.getenv('ERC8004_AGENT_DOMAIN')
+                        or 'assistant.localhost:8083'
+                    )
+                    client_info = adapter.get_agent_by_domain(client_domain)
+                    if client_info and client_info.get('agent_id'):
+                        fetched_auth = adapter.get_feedback_auth_id(int(client_info['agent_id']), agent_id)
+                        if fetched_auth:
+                            feedback_auth_id = fetched_auth
+                except Exception:
+                    pass
             # Pull task/context ids if available
             task_ids_by_agent = state.get('task_ids_by_agent', {}) if isinstance(state.get('task_ids_by_agent'), dict) else {}
             context_ids_by_agent = state.get('context_ids_by_agent', {}) if isinstance(state.get('context_ids_by_agent'), dict) else {}

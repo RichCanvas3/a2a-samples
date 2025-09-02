@@ -76,22 +76,15 @@ class AirbnbAgentExecutor(AgentExecutor):
                     domain_val = server_domain
                 server_info = adapter.get_agent_by_domain(domain_val)
                 if server_info and server_info.get('agent_id'):
-                    signing_key = (
-                        os.getenv('ERC8004_PRIVATE_KEY_RESERVE') if isinstance(self.agent, ReserveAgent)
-                        else os.getenv('ERC8004_PRIVATE_KEY_FINDER')
-                    ) or os.getenv('ERC8004_PRIVATE_KEY')
                     logger.info(
-                        'ERC-8004: authorize_feedback (client=%s, server=%s) using server key variant=%s',
+                        'ERC-8004: fetch FeedbackAuthID via getFeedbackAuthId (client=%s, server=%s)',
                         client_id_meta,
                         server_info['agent_id'],
-                        'reserve' if isinstance(self.agent, ReserveAgent) else 'finder',
                     )
-                    auth_res = adapter.authorize_feedback_from_client(
-                        client_agent_id=int(client_id_meta),
-                        server_agent_id=int(server_info['agent_id']),
-                        signing_private_key=signing_key,
+                    view_res = adapter.check_feedback_authorized(
+                        int(client_id_meta), int(server_info['agent_id'])
                     )
-                    logger.info('ERC-8004: authorize_feedback result: %s', auth_res)
+                    logger.info('ERC-8004: check_feedback_authorized result: %s', view_res)
         except Exception as e:
             logger.info('ERC-8004: server-side authorize_feedback failed: %s', e)
 

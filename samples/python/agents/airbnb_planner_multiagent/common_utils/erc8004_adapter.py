@@ -119,7 +119,7 @@ class Erc8004Adapter:
                 gas_price = self._w3.eth.gas_price
                 gas_price_mult = float(os.getenv('ERC8004_GAS_PRICE_MULT', '1.2'))
                 try:
-                    override_gwei = os.getenv('ERC8004_GAS_PRICE_GWEI')
+                    override_gwei = os.getenv('ERC8004_GAS_PRICE_MULT')
                     if override_gwei:
                         gas_price = self._w3.to_wei(float(override_gwei), 'gwei')
                     else:
@@ -206,7 +206,7 @@ class Erc8004Adapter:
             gas_price = self._w3.eth.gas_price
             gas_price_mult = float(os.getenv('ERC8004_GAS_PRICE_MULT', '1.2'))
             try:
-                override_gwei = os.getenv('ERC8004_GAS_PRICE_GWEI')
+                override_gwei = os.getenv('ERC8004_GAS_PRICE_MULT')
                 if override_gwei:
                     gas_price = self._w3.to_wei(float(override_gwei), 'gwei')
                 else:
@@ -517,19 +517,36 @@ class Erc8004Adapter:
                 logger.info('ERC-8004: Feedback authorization function not found in ABI.')
                 return None
 
+            # Gas/fees for authorize_feedback: estimate with safety margin and allow env overrides
             gas_est = None
             try:
                 gas_est = fn.estimate_gas({'from': acct_addr})
             except Exception:
                 gas_est = 100000
+            gas_mult = float(os.getenv('ERC8004_GAS_MULT', '1.5'))
+            min_gas = int(os.getenv('ERC8004_MIN_GAS', '200000'))
+            gas_limit = max(int(gas_est * gas_mult), min_gas)
+
+            gas_price = self._w3.eth.gas_price
+            gas_price_mult = float(os.getenv('ERC8004_GAS_PRICE_MULT', '1.2'))
+            try:
+                override_gwei = os.getenv('ERC8004_GAS_PRICE_MULT')
+                if override_gwei:
+                    gas_price = self._w3.to_wei(float(override_gwei), 'gwei')
+                else:
+                    gas_price = int(gas_price * gas_price_mult)
+            except Exception:
+                pass
+
             tx = fn.build_transaction(
                 {
                     'from': acct_addr,
                     'nonce': self._w3.eth.get_transaction_count(acct_addr, 'pending'),
-                    'gas': int(gas_est * 1.2),
-                    'gasPrice': self._w3.eth.gas_price,
+                    'gas': gas_limit,
+                    'gasPrice': gas_price,
                 }
             )
+            logger.info('ERC-8004: authorize gas_limit=%s gas_price=%s wei (est=%s)', gas_limit, gas_price, gas_est)
             signed = self._w3.eth.account.sign_transaction(tx, pk)
             tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
             try:
@@ -706,5 +723,23 @@ class Erc8004Adapter:
         except Exception as e:
             logger.info('ERC-8004: check_feedback_authorized failed: %s', e)
         return result
+
+    def get_feedback_auth_id(self, client_agent_id: int, server_agent_id: int) -> Optional[str]:
+        """Return only the FeedbackAuthID using the contract view.
+
+        Returns hex string or None.
+        """
+        try:
+            contract = self._get_reputation_contract()
+            if contract is None or not hasattr(contract.functions, 'getFeedbackAuthId'):
+                return None
+            fid = contract.functions.getFeedbackAuthId(int(client_agent_id), int(server_agent_id)).call()
+            logger.info('ERC-8004: getFeedbackAuthId(client=%s, server=%s) -> %s', client_agent_id, server_agent_id, fid)
+            if fid is None:
+                return None
+            return fid.hex() if hasattr(fid, 'hex') else str(fid)
+        except Exception as e:
+            logger.info('ERC-8004: get_feedback_auth_id view failed: %s', e)
+            return None
 
 
