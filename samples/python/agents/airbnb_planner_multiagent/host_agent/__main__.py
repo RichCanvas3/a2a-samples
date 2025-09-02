@@ -75,8 +75,7 @@ async def main():
         assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT')
         adapter = Erc8004Adapter(private_key=assistant_pk)
         assistant_domain = (
-            os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
-            or os.getenv('ERC8004_AGENT_DOMAIN')
+            os.getenv('ASSISTANT_DOMAIN')
             or 'assistant.localhost:8083'
         )
         adapter.ensure_identity('assistant', agent_domain=assistant_domain, signing_private_key=assistant_pk)
@@ -136,7 +135,7 @@ async def main():
         try:
             if os.getenv('ERC8004_CARD_LOOKUP', 'false').lower() == 'true':
                 adapter = Erc8004Adapter()
-                domain = os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT') or os.getenv('ERC8004_AGENT_DOMAIN') or 'assistant.localhost:8083'
+                domain = os.getenv('ASSISTANT_DOMAIN') or 'assistant.localhost:8083'
                 info = adapter.get_agent_by_domain(domain)
                 if info and info.get('agent_id') and info.get('address'):
                     chain_id = os.getenv('ERC8004_CHAIN_ID', '11155111')
@@ -174,7 +173,7 @@ async def main():
         logger.info(f'************ FINDER_DOMAIN: {os.getenv("FINDER_DOMAIN", "finder.localhost:10002")}')
         finder = adapter.get_agent_by_domain(os.getenv('FINDER_DOMAIN', 'finder.localhost:10002'))
         reserve = adapter.get_agent_by_domain(os.getenv('RESERVE_DOMAIN', 'reserve.localhost:10002'))
-        assistant = adapter.get_agent_by_domain(os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT', os.getenv('ERC8004_AGENT_DOMAIN', 'assistant.localhost:8083')))
+        assistant = adapter.get_agent_by_domain(os.getenv('ASSISTANT_DOMAIN', 'assistant.localhost:8083'))
 
         # Check authorization statuses (assistant as client)
         auths = {}

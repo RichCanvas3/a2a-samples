@@ -365,7 +365,7 @@ class RoutingAgent:
         target_id = int(target_info['agent_id'])
 
         # Client (assistant) id: assume assistant domain is configured
-        client_domain = os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT') or os.getenv('ERC8004_AGENT_DOMAIN') or 'assistant.localhost:8083'
+        client_domain = os.getenv('ASSISTANT_DOMAIN') or 'assistant.localhost:8083'
         client_info = adapter.get_agent_by_domain(client_domain)
         if not client_info or not client_info.get('agent_id'):
             return {'status': 'error', 'message': f'Could not resolve client agent {client_agent_name}'}
@@ -450,8 +450,7 @@ class RoutingAgent:
             try:
                 # Resolve assistant client id
                 client_domain = (
-                    os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
-                    or os.getenv('ERC8004_AGENT_DOMAIN')
+                    os.getenv('ASSISTANT_DOMAIN')
                     or 'assistant.localhost:8083'
                 )
                 client_info = adapter.get_agent_by_domain(client_domain)
@@ -493,8 +492,7 @@ class RoutingAgent:
             if not feedback_auth_id:
                 try:
                     client_domain = (
-                        os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
-                        or os.getenv('ERC8004_AGENT_DOMAIN')
+                        os.getenv('ASSISTANT_DOMAIN')
                         or 'assistant.localhost:8083'
                     )
                     client_info = adapter.get_agent_by_domain(client_domain)
@@ -601,8 +599,7 @@ class RoutingAgent:
         try:
             adapter = Erc8004Adapter()
             client_domain = (
-                os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
-                or os.getenv('ERC8004_AGENT_DOMAIN')
+                os.getenv('ASSISTANT_DOMAIN')
                 or 'assistant.localhost:8083'
             )
             client_info = adapter.get_agent_by_domain(client_domain)

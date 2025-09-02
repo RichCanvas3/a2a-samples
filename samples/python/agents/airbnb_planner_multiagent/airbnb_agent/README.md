@@ -5,6 +5,22 @@
 1. Create a `.env` file with:
    - `OPENAI_API_KEY` (required)
    - `OPENAI_MODEL` (optional, defaults to `gpt-4o-mini`)
+   - ERC-8004 (optional unless you want identity/feedback integration):
+     - `ERC8004_ENABLED=true`
+     - `ERC8004_RPC_URL=<https RPC endpoint>`
+     - `ERC8004_IDENTITY_REGISTRY=<identity registry address>`
+     - `ERC8004_REPUTATION_REGISTRY=<reputation registry address>`
+     - Finder server key: `ERC8004_PRIVATE_KEY_FINDER=<hex key>`
+     - Reserve server key: `ERC8004_PRIVATE_KEY_RESERVE=<hex key>`
+     - Assistant key (only for read ops or signatures): `ERC8004_PRIVATE_KEY_ASSISTANT=<hex key>`
+     - Domains (used to resolve IDs):
+       - `FINDER_DOMAIN=finder.localhost:10002`
+       - `RESERVE_DOMAIN=reserve.localhost:10002`
+       - `ASSISTANT_DOMAIN=assistant.localhost:8083`
+     - Optional gas tuning:
+       - `ERC8004_GAS_MULT=1.5`
+       - `ERC8004_MIN_GAS=500000`
+       - `ERC8004_GAS_PRICE_MULT=1.2` or `ERC8004_GAS_PRICE_GWEI=5`
 
 2. Start the server
 
