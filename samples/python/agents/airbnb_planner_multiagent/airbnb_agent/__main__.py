@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import click
+import logging
+import sys
 import uvicorn
 
 from a2a.server.apps import A2AStarletteApplication
@@ -37,6 +39,16 @@ from eth_account.messages import encode_defunct
 
 
 load_dotenv(override=True)
+
+# Ensure INFO logs from agent modules are emitted
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+
+# Ensure prints flush immediately
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 SERVER_CONFIGS = {
     'bnb': {
@@ -304,10 +316,10 @@ def _build_erc8004_registration(port: int, variant: str) -> dict[str, Any] | Non
         # Determine domain for lookup/signing
         if variant == 'reserve':
             domain = os.getenv('RESERVE_DOMAIN') or os.getenv('ERC8004_AGENT_DOMAIN_RESERVE') or f'reserve.localhost:{port}'
-            private_key = os.getenv('ERC8004_PRIVATE_KEY_RESERVE') or os.getenv('ERC8004_PRIVATE_KEY')
+            private_key = os.getenv('ERC8004_PRIVATE_KEY_RESERVE')
         else:
             domain = os.getenv('FINDER_DOMAIN') or os.getenv('ERC8004_AGENT_DOMAIN_FINDER') or f'finder.localhost:{port}'
-            private_key = os.getenv('ERC8004_PRIVATE_KEY_FINDER') or os.getenv('ERC8004_PRIVATE_KEY')
+            private_key = os.getenv('ERC8004_PRIVATE_KEY_FINDER')
 
         info = adapter.get_agent_by_domain(domain)
         if not info:

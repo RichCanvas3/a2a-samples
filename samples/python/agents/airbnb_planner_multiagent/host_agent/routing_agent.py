@@ -373,11 +373,14 @@ class RoutingAgent:
 
         # Execute authorization tx signed by the SERVER (Finder/Reserve) key via adapter
         # No user-involved steps; adapter handles acceptFeedback and returns FeedbackAuthID
-        assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+        # Sign with the SERVER agent's key (Finder/Reserve), not the assistant's key
+        server_pk = (
+            os.getenv('ERC8004_PRIVATE_KEY_RESERVE') if is_reserve else os.getenv('ERC8004_PRIVATE_KEY_FINDER')
+        ) or os.getenv('ERC8004_PRIVATE_KEY')
         auth_result = adapter.authorize_feedback_from_client(
             client_agent_id=client_id,
             server_agent_id=target_id,
-            signing_private_key=assistant_pk,
+            signing_private_key=server_pk,
         )
         if not auth_result:
             return {'status': 'error', 'message': 'Authorization transaction failed.'}
@@ -388,7 +391,7 @@ class RoutingAgent:
             client_addr = auth_result.get('client_address') or client_info.get('address', '')
             if not client_addr:
                 # Derive from assistant signing key if available
-                pk_env = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+                pk_env = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT')
                 if pk_env:
                     try:
                         from eth_account import Account  # type: ignore
@@ -457,21 +460,24 @@ class RoutingAgent:
                 client_info = adapter.get_agent_by_domain(client_domain)
                 if client_info and client_info.get('agent_id'):
                     # Call acceptFeedback with server=target_id (reserve/finder), client=assistant
-                    assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+                    # Server key (Finder/Reserve)
+                    server_pk2 = (
+                        os.getenv('ERC8004_PRIVATE_KEY_RESERVE') if is_reserve else os.getenv('ERC8004_PRIVATE_KEY_FINDER')
+                    )
                     auth_res = adapter.authorize_feedback_from_client(
                         client_agent_id=int(client_info['agent_id']),
                         server_agent_id=agent_id,
-                        signing_private_key=assistant_pk,
+                        signing_private_key=server_pk2,
                     )
                     if auth_res and auth_res.get('feedback_auth_id'):
                         feedback_auth_id = str(auth_res['feedback_auth_id'])
                         self.authorized_feedback_auth_id_by_target_id[agent_id] = feedback_auth_id
                         # Also keep client address for fallback display
                         client_addr = auth_res.get('client_address') or client_info.get('address', '')
-                        if not client_addr and assistant_pk:
+                        if not client_addr and os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT'):
                             try:
                                 from eth_account import Account  # type: ignore
-                                client_addr = Account.from_key(assistant_pk).address
+                                client_addr = Account.from_key(os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT')).address
                             except Exception:
                                 client_addr = ''
                         if client_addr:
@@ -582,6 +588,21 @@ class RoutingAgent:
                 'messageId': message_id,
             },
         }
+
+        # Attach client agent id (assistant) for downstream server-side authorization
+        try:
+            adapter = Erc8004Adapter()
+            client_domain = (
+                os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
+                or os.getenv('ERC8004_AGENT_DOMAIN')
+                or 'assistant.localhost:8083'
+            )
+            client_info = adapter.get_agent_by_domain(client_domain)
+            client_id_val = int(client_info['agent_id']) if (client_info and client_info.get('agent_id')) else None
+            if client_id_val is not None:
+                payload['message']['metadata'] = {'client_agent_id': str(client_id_val)}
+        except Exception:
+            pass
 
         if task_id:
             payload['message']['taskId'] = task_id

@@ -72,14 +72,14 @@ async def main():
     """Main app: serves AgentCard and mounts Gradio UI under /."""
     # ERC-8004: register Assistant agent identity (optional)
     try:
-        assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+        assistant_pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT')
         adapter = Erc8004Adapter(private_key=assistant_pk)
         assistant_domain = (
             os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT')
             or os.getenv('ERC8004_AGENT_DOMAIN')
             or 'assistant.localhost:8083'
         )
-        adapter.ensure_identity('assistant', agent_domain=assistant_domain)
+        adapter.ensure_identity('assistant', agent_domain=assistant_domain, signing_private_key=assistant_pk)
     except Exception:
         pass
 
@@ -143,7 +143,7 @@ async def main():
                     caip10 = f"eip155:{chain_id}:{info['address']}"
                     # Optional ownership signature over domain
                     signature_hex = None
-                    private_key = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+                    private_key = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT')
                     if private_key:
                         try:
                             from eth_account import Account

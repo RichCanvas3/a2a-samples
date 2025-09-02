@@ -21,7 +21,7 @@ class Erc8004Adapter:
     Expected environment variables (optional):
     - ERC8004_ENABLED=true|false
     - ERC8004_RPC_URL
-    - ERC8004_PRIVATE_KEY
+
     - ERC8004_IDENTITY_REGISTRY
     - ERC8004_REPUTATION_REGISTRY
     """
@@ -29,7 +29,6 @@ class Erc8004Adapter:
     def __init__(self, private_key: Optional[str] = None, rpc_url: Optional[str] = None) -> None:
         self.enabled = os.getenv('ERC8004_ENABLED', 'false').lower() == 'true'
         self.rpc_url = rpc_url or os.getenv('ERC8004_RPC_URL')
-        self.private_key = private_key or os.getenv('ERC8004_PRIVATE_KEY')
         self.identity_registry = os.getenv('ERC8004_IDENTITY_REGISTRY')
         self.reputation_registry = os.getenv('ERC8004_REPUTATION_REGISTRY')
         self.agent_id: Optional[str] = None
@@ -45,12 +44,9 @@ class Erc8004Adapter:
         # Initialize Web3 if RPC is available, even without a private key (read-only ops)
         if self.rpc_url:
             try:
-                self._w3 = Web3(Web3.HTTPProvider(self.rpc_url, request_kwargs={"timeout": 20}))
-                if self.private_key:
-                    acct = self._w3.eth.account.from_key(self.private_key)
-                    logger.info('ERC-8004 Web3 client initialized (address=%s)', acct.address)
-                else:
-                    logger.info('ERC-8004 Web3 client initialized (read-only)')
+                rpc_timeout = int(os.getenv('ERC8004_RPC_TIMEOUT_SEC', '20'))
+                self._w3 = Web3(Web3.HTTPProvider(self.rpc_url, request_kwargs={"timeout": rpc_timeout}))
+                logger.info('ERC-8004 Web3 client initialized (read-only)')
             except Exception as e:
                 logger.warning('ERC-8004: failed to init Web3 client: %s', e)
                 self._w3 = None
@@ -89,7 +85,7 @@ class Erc8004Adapter:
 
             if identity is not None:
                 if not signing_private_key:
-                    logger.info('ERC-8004: ensure_identity skipped (no signing key provided).')
+                    logger.info('ERC-8004: ensure_identity skipped (no signing key provided 1).')
                     return
                 acct_addr = self._w3.eth.account.from_key(signing_private_key).address
                 logger.info('find agent by acct_addr: %s', acct_addr)
@@ -110,20 +106,36 @@ class Erc8004Adapter:
                 # Optional registration fee (default 0.0 if unset)
                 fee_eth = float(os.getenv('ERC8004_REGISTRATION_FEE_ETH', '0.0'))
                 value = self._w3.to_wei(fee_eth, 'ether') if fee_eth > 0 else 0
+                # Gas/fees: estimate and apply safety margin + minimums; allow env overrides
                 gas_est = None
                 try:
                     gas_est = fn.estimate_gas({'from': acct_addr, 'value': value})
                 except Exception:
                     gas_est = 300000
+                gas_mult = float(os.getenv('ERC8004_GAS_MULT', '1.5'))
+                min_gas = int(os.getenv('ERC8004_MIN_GAS', '500000'))
+                gas_limit = max(int(gas_est * gas_mult), min_gas)
+
+                gas_price = self._w3.eth.gas_price
+                gas_price_mult = float(os.getenv('ERC8004_GAS_PRICE_MULT', '1.2'))
+                try:
+                    override_gwei = os.getenv('ERC8004_GAS_PRICE_GWEI')
+                    if override_gwei:
+                        gas_price = self._w3.to_wei(float(override_gwei), 'gwei')
+                    else:
+                        gas_price = int(gas_price * gas_price_mult)
+                except Exception:
+                    pass
                 tx = fn.build_transaction(
                     {
                         'from': acct_addr,
-                        'nonce': self._w3.eth.get_transaction_count(acct_addr),
-                        'gas': int(gas_est * 1.2),
-                        'gasPrice': self._w3.eth.gas_price,
+                        'nonce': self._w3.eth.get_transaction_count(acct_addr, 'pending'),
+                        'gas': gas_limit,
+                        'gasPrice': gas_price,
                         'value': value,
                     }
                 )
+                logger.info('ERC-8004: newAgent gas_limit=%s gas_price=%s wei (est=%s)', gas_limit, gas_price, gas_est)
                 signed = self._w3.eth.account.sign_transaction(tx, signing_private_key)
                 tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
                 try:
@@ -185,16 +197,33 @@ class Erc8004Adapter:
             ]
             contract = self._w3.eth.contract(address=self.identity_registry, abi=abi_min)
             if not signing_private_key:
-                logger.info('ERC-8004: ensure_identity skipped (no signing key provided).')
+                logger.info('ERC-8004: ensure_identity skipped (no signing key provided 2).')
                 return
             acct_addr = self._w3.eth.account.from_key(signing_private_key).address
+            # Fallback gas config
+            gas_mult = float(os.getenv('ERC8004_GAS_MULT', '1.5'))
+            min_gas = int(os.getenv('ERC8004_MIN_GAS', '500000'))
+            gas_price = self._w3.eth.gas_price
+            gas_price_mult = float(os.getenv('ERC8004_GAS_PRICE_MULT', '1.2'))
+            try:
+                override_gwei = os.getenv('ERC8004_GAS_PRICE_GWEI')
+                if override_gwei:
+                    gas_price = self._w3.to_wei(float(override_gwei), 'gwei')
+                else:
+                    gas_price = int(gas_price * gas_price_mult)
+            except Exception:
+                pass
+            gas_limit = max(int(300000 * gas_mult), min_gas)
+
             tx = contract.functions.register(agent_name).build_transaction(
                 {
                     'from': acct_addr,
-                    'nonce': self._w3.eth.get_transaction_count(acct_addr),
-                    'gas': 300000,
+                    'nonce': self._w3.eth.get_transaction_count(acct_addr, 'pending'),
+                    'gas': gas_limit,
+                    'gasPrice': gas_price,
                 }
             )
+            logger.info('ERC-8004: register gas_limit=%s gas_price=%s wei', gas_limit, gas_price)
             signed = self._w3.eth.account.sign_transaction(tx, signing_private_key)
             tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
             try:
@@ -374,7 +403,7 @@ class Erc8004Adapter:
 
         try:
             if not signing_private_key:
-                logger.info('ERC-8004: record_feedback skipped (no signing key provided).')
+                logger.info('ERC-8004: record_feedback skipped (no signing key provided 3).')
                 return None
             acct_addr = self._w3.eth.account.from_key(signing_private_key).address
 
@@ -622,11 +651,11 @@ class Erc8004Adapter:
         pk = None
         dom_lower = (domain or '').lower()
         if 'finder' in dom_lower:
-            pk = os.getenv('ERC8004_PRIVATE_KEY_FINDER') or os.getenv('ERC8004_PRIVATE_KEY')
+            pk = os.getenv('ERC8004_PRIVATE_KEY_FINDER') 
         elif 'reserve' in dom_lower:
-            pk = os.getenv('ERC8004_PRIVATE_KEY_RESERVE') or os.getenv('ERC8004_PRIVATE_KEY')
+            pk = os.getenv('ERC8004_PRIVATE_KEY_RESERVE')
         elif 'assistant' in dom_lower:
-            pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT') or os.getenv('ERC8004_PRIVATE_KEY')
+            pk = os.getenv('ERC8004_PRIVATE_KEY_ASSISTANT')
         if pk:
             try:
                 addr = self._w3.eth.account.from_key(pk).address

@@ -86,12 +86,13 @@ class BaseAgent:
             # Variant-specific private key and domain
             pk_env = 'ERC8004_PRIVATE_KEY_RESERVE' if self.variant == 'reserve' else 'ERC8004_PRIVATE_KEY_FINDER'
             dom_env = 'ERC8004_AGENT_DOMAIN_RESERVE' if self.variant == 'reserve' else 'ERC8004_AGENT_DOMAIN_FINDER'
-            variant_pk = os.getenv(pk_env) or os.getenv('ERC8004_PRIVATE_KEY')
-            variant_domain = os.getenv(dom_env) or os.getenv('ERC8004_AGENT_DOMAIN') or os.getenv('APP_URL')
+            variant_pk = os.getenv(pk_env)
+            variant_domain = os.getenv(dom_env)
             self.erc8004 = Erc8004Adapter(private_key=variant_pk)
             self.erc8004.ensure_identity(
                 'Airbnb Agent - Reserve' if self.variant == 'reserve' else 'Airbnb Agent - Finder',
                 agent_domain=variant_domain,
+                signing_private_key=variant_pk
             )
         except Exception:
             self.erc8004 = None
