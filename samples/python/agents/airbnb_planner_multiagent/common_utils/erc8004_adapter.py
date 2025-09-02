@@ -513,95 +513,48 @@ class Erc8004Adapter:
             if getattr(receipt, 'status', 0) != 1:
                 self._log_tx_failure_details(tx_hash, receipt)
                 return None
-            # Extract FeedbackAuthID from events if available
-            def _to_0x(val):
-                try:
-                    if val is None:
-                        return None
-                    # HexBytes or bytes-like
-                    if hasattr(val, 'hex'):
-                        h = val.hex()
-                        return h if h.startswith('0x') else f'0x{h}'
-                    if isinstance(val, (bytes, bytearray)):
-                        import binascii
-                        return '0x' + binascii.hexlify(val).decode('utf-8')
-                    # Strings: ensure 0x prefix if looks like hex
-                    if isinstance(val, str):
-                        return val if val.startswith('0x') else val
-                    return str(val)
-                except Exception:
-                    return None
-
+            # Prefer contract views to confirm and obtain FeedbackAuthID
             feedback_auth_id = None
             matched_event = None
             try:
-                for evt_name in ('AuthFeedback', 'FeedbackAuthorized', 'FeedbackAuth'):
+                contract = self._get_reputation_contract()
+                logger.info('ERC-8004: contract: %s', contract)
+                logger.info('ERC-8004: has function: %s', hasattr(contract.functions, 'isFeedbackAuthorized') if contract else None)
+                # Block and poll until authorized or timeout
+                import time as _time
+                total_wait_sec = float(os.getenv('ERC8004_VIEW_WAIT_SEC', '8'))
+                poll_ms = float(os.getenv('ERC8004_VIEW_POLL_MS', '300'))
+                deadline = _time.time() + total_wait_sec
+                while feedback_auth_id is None and _time.time() < deadline and contract is not None:
                     try:
-                        ev = getattr(self._get_reputation_contract().events, evt_name)()
-                        logs = ev.process_receipt(receipt)
-                        if not logs:
-                            continue
-                        args = logs[0].get('args', {}) or {}
-                        # Search args case-insensitively for feedbackAuthId-like key
-                        candidate = None
-                        for k, v in args.items():
-                            kl = str(k).lower()
-                            if kl in ('feedbackauthid', 'authid', 'feedback_auth_id', 'feedbackauth'):
-                                candidate = v
+                        if hasattr(contract.functions, 'isFeedbackAuthorized'):
+                            logger.info('ERC-8004: isFeedbackAuthorized(client=%s, server=%s)', client_agent_id_int, server_agent_id_int)
+                            is_auth, fid = contract.functions.isFeedbackAuthorized(client_agent_id_int, server_agent_id_int).call()
+                            logger.info('ERC-8004: isFeedbackAuthorized(client=%s, server=%s) -> %s, %s', client_agent_id_int, server_agent_id_int, is_auth, fid)
+                            if is_auth and fid is not None:
+                                if hasattr(fid, 'hex'):
+                                    h = fid.hex()
+                                    feedback_auth_id = h if h.startswith('0x') else f'0x{h}'
+                                else:
+                                    feedback_auth_id = str(fid)
+                                matched_event = 'isFeedbackAuthorized(view)'
                                 break
-                        if candidate is None:
-                            # Also try known keys directly
-                            candidate = args.get('feedbackAuthId') or args.get('authId') or args.get('FeedbackAuthID')
-                        norm = _to_0x(candidate)
-                        if norm:
-                            feedback_auth_id = norm
-                            matched_event = evt_name
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-
-            # If still missing, try raw log topic decoding for AuthFeedback(uint256,uint256,bytes32)
-            if feedback_auth_id is None:
-                try:
-                    expected_topic0 = Web3.keccak(text='AuthFeedback(uint256,uint256,bytes32)').hex()
-                    rep_addr = (self.reputation_registry or '').lower()
-                    for lg in getattr(receipt, 'logs', []) or []:
-                        try:
-                            if rep_addr and str(lg.get('address', '')).lower() != rep_addr:
-                                continue
-                            topics = lg.get('topics') or []
-                            if len(topics) >= 4:
-                                t0 = topics[0].hex() if hasattr(topics[0], 'hex') else str(topics[0])
-                                if t0.lower() == expected_topic0.lower():
-                                    t3 = topics[3]
-                                    if hasattr(t3, 'hex'):
-                                        feedback_auth_id = t3.hex()
-                                    else:
-                                        feedback_auth_id = str(t3)
-                                    matched_event = 'AuthFeedback(topic)'
-                                    break
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
-
-            # Final fallback: query the contract view getFeedbackAuthId(client, server)
-            if feedback_auth_id is None:
-                try:
-                    contract = self._get_reputation_contract()
-                    if contract is not None and hasattr(contract.functions, 'getFeedbackAuthId'):
-                        fid = contract.functions.getFeedbackAuthId(client_agent_id_int, server_agent_id_int).call()
-                        # fid may be bytes32/HexBytes
-                        if hasattr(fid, 'hex'):
-                            fid_hex = fid.hex()
-                            feedback_auth_id = fid_hex if fid_hex.startswith('0x') else f'0x{fid_hex}'
-                        else:
-                            feedback_auth_id = str(fid)
-                        matched_event = 'getFeedbackAuthId(view)'
-                except Exception as e:
-                    logger.debug('ERC-8004: getFeedbackAuthId view failed: %s', e)
+                        if hasattr(contract.functions, 'getFeedbackAuthId'):
+                            fid2 = contract.functions.getFeedbackAuthId(client_agent_id_int, server_agent_id_int).call()
+                            logger.info('ERC-8004: getFeedbackAuthId(client=%s, server=%s) -> %s', client_agent_id_int, server_agent_id_int, fid2)
+                            if fid2 is not None:
+                                if hasattr(fid2, 'hex'):
+                                    h2 = fid2.hex()
+                                    feedback_auth_id = h2 if h2.startswith('0x') else f'0x{h2}'
+                                else:
+                                    feedback_auth_id = str(fid2)
+                                matched_event = 'getFeedbackAuthId(view)'
+                                break
+                    except Exception as _e:
+                        logger.debug('ERC-8004: view poll error: %s', _e)
+                    _time.sleep(max(0.05, poll_ms / 1000.0))
+            except Exception as e:
+                logger.debug('ERC-8004: view resolution for FeedbackAuthID failed: %s', e)
 
             result: dict[str, Any] = {
                 'tx_hash': tx_hash.hex(),
@@ -621,11 +574,10 @@ class Erc8004Adapter:
             except Exception:
                 pass
             if feedback_auth_id:
-                logger.info('ERC-8004: FeedbackAuthID resolved from event %s: %s', matched_event, feedback_auth_id)
+                logger.info('ERC-8004: FeedbackAuthID resolved via %s: %s', matched_event, feedback_auth_id)
             else:
-                # Fallback to tx hash if event didn't include an id
-                feedback_auth_id = tx_hash.hex()
-                logger.info('ERC-8004: FeedbackAuthID falling back to tx hash: %s', feedback_auth_id)
+                # Do not invent an id; leave None so a subsequent read can pick it up
+                logger.info('ERC-8004: FeedbackAuthID not available immediately; will rely on subsequent view lookups.')
             if feedback_auth_id:
                 result['feedback_auth_id'] = str(feedback_auth_id)
             return result
@@ -684,5 +636,46 @@ class Erc8004Adapter:
             except Exception:
                 return None
         return None
+
+    def check_feedback_authorized(self, client_agent_id: int, server_agent_id: int) -> dict[str, Any]:
+        """Check authorization status and current FeedbackAuthID for a client-server pair.
+
+        Returns dict: { 'isAuthorized': bool|None, 'feedbackAuthId': str|None }
+        Logs details; read-only, no txs.
+        """
+        result: dict[str, Any] = {'isAuthorized': None, 'feedbackAuthId': None}
+
+        logger.info('ERC-8004: check_feedback_authorized %s, %s.', client_agent_id, server_agent_id)
+        try:
+            contract = self._get_reputation_contract()
+            if contract is None:
+                logger.info('ERC-8004: check_feedback_authorized skipped (no reputation contract).')
+                return result
+            # Prefer combined view first
+            try:
+                logger.info('ERC-8004: check isFeedbackAuthorized ')
+                if hasattr(contract.functions, 'isFeedbackAuthorized'):
+                    logger.info('ERC-8004: isFeedbackAuthorized ')
+                    is_auth, fid = contract.functions.isFeedbackAuthorized(int(client_agent_id), int(server_agent_id)).call()
+                    logger.info('ERC-8004: isFeedbackAuthorized finished')
+                    logger.info('ERC-8004: isFeedbackAuthorized(client=%s, server=%s) -> %s, %s', client_agent_id, server_agent_id, is_auth, fid)
+                    result['isAuthorized'] = bool(is_auth)
+                    if fid is not None:
+                        result['feedbackAuthId'] = fid.hex() if hasattr(fid, 'hex') else str(fid)
+                        return result
+            except Exception as e:
+                logger.info('ERC-8004: isFeedbackAuthorized view failed: %s', e)
+            # Fallback to id-only view
+            try:
+                if hasattr(contract.functions, 'getFeedbackAuthId'):
+                    fid2 = contract.functions.getFeedbackAuthId(int(client_agent_id), int(server_agent_id)).call()
+                    logger.info('ERC-8004: getFeedbackAuthId(client=%s, server=%s) -> %s', client_agent_id, server_agent_id, fid2)
+                    if fid2 is not None:
+                        result['feedbackAuthId'] = fid2.hex() if hasattr(fid2, 'hex') else str(fid2)
+            except Exception as e:
+                logger.info('ERC-8004: getFeedbackAuthId view failed: %s', e)
+        except Exception as e:
+            logger.info('ERC-8004: check_feedback_authorized failed: %s', e)
+        return result
 
 

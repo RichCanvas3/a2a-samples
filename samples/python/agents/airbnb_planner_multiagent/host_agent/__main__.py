@@ -174,7 +174,22 @@ async def main():
         logger.info(f'************ FINDER_DOMAIN: {os.getenv("FINDER_DOMAIN", "finder.localhost:10002")}')
         finder = adapter.get_agent_by_domain(os.getenv('FINDER_DOMAIN', 'finder.localhost:10002'))
         reserve = adapter.get_agent_by_domain(os.getenv('RESERVE_DOMAIN', 'reserve.localhost:10002'))
-        return {'finder': finder, 'reserve': reserve}
+        assistant = adapter.get_agent_by_domain(os.getenv('ERC8004_AGENT_DOMAIN_ASSISTANT', os.getenv('ERC8004_AGENT_DOMAIN', 'assistant.localhost:8083')))
+
+        # Check authorization statuses (assistant as client)
+        auths = {}
+        try:
+            if assistant and assistant.get('agent_id') and finder and finder.get('agent_id'):
+                auths['assistant_finder'] = adapter.check_feedback_authorized(int(assistant['agent_id']), int(finder['agent_id']))
+        except Exception:
+            auths['assistant_finder'] = {'isAuthorized': None, 'feedbackAuthId': None}
+        try:
+            if assistant and assistant.get('agent_id') and reserve and reserve.get('agent_id'):
+                auths['assistant_reserve'] = adapter.check_feedback_authorized(int(assistant['agent_id']), int(reserve['agent_id']))
+        except Exception:
+            auths['assistant_reserve'] = {'isAuthorized': None, 'feedbackAuthId': None}
+
+        return {'finder': finder, 'reserve': reserve, 'assistant': assistant, 'auth': auths}
 
     @app.get('/.well-known/feedback.json')
     def feedback_json():
