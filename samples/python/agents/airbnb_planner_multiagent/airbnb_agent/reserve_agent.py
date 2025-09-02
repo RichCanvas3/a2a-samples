@@ -28,19 +28,7 @@ def reserve_listing(listing_url: str, check_in: str, check_out: str, guests: int
     Returns a confirmation with a mock booking ID and echo of the inputs.
     """
     booking_id = uuid.uuid4().hex[:10]
-    try:
-        adapter = Erc8004Adapter()
-        adapter.record_reservation(
-            {
-                'booking_id': booking_id,
-                'listing_url': listing_url,
-                'check_in': check_in,
-                'check_out': check_out,
-                'guests': guests,
-            }
-        )
-    except Exception:
-        pass
+
     return (
         f"Reservation confirmed.\n"
         f"Booking ID: {booking_id}\n"
