@@ -1,5 +1,10 @@
+import "dotenv/config";
 import express from "express";
-import { v4 as uuidv4 } from 'uuid'; // For generating unique IDs
+import { v4 as uuidv4 } from 'uuid';
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import OpenAI from "openai";
 
 import {
   AgentCard,
@@ -18,20 +23,39 @@ import {
   ExecutionEventBus,
   DefaultRequestHandler,
 } from "@a2a-js/sdk/server";
-import { MessageData } from "genkit";
-import { ai } from "./genkit.js";
-import { searchMovies, searchPeople } from "./tools.js";
+import { openAiToolDefinitions, openAiToolHandlers } from "./tools.js";
 
-if (!process.env.GEMINI_API_KEY || !process.env.TMDB_API_KEY) {
-  console.error("GEMINI_API_KEY and TMDB_API_KEY environment variables are required")
+if (!process.env.OPENAI_API_KEY || !process.env.TMDB_API_KEY) {
+  console.error("OPENAI_API_KEY and TMDB_API_KEY environment variables are required")
   process.exit(1);
 }
 
 // Simple store for contexts
 const contexts: Map<string, Message[]> = new Map();
 
-// Load the Genkit prompt
-const movieAgentPrompt = ai.prompt('movie_agent');
+// Load and render system prompt from file
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const promptPath = path.join(__dirname, "movie_agent.prompt");
+
+function renderSystemPrompt(goal?: string): string {
+  const raw = fs.readFileSync(promptPath, "utf-8");
+  // Remove explicit role line from template
+  let content = raw.replace(/^\s*{{role\s+"system"}}\s*\n?/, "");
+  const nowStr = new Date().toISOString();
+  content = content.replaceAll("{{now}}", nowStr);
+
+  if (goal && goal.length > 0) {
+    content = content
+      .replaceAll("{{#if goal}}", "")
+      .replaceAll("{{/if}}", "")
+      .replaceAll("{{goal}}", goal);
+  } else {
+    // Remove the entire conditional block if no goal is provided
+    content = content.replace(/{{#if goal}}[\s\S]*?{{\/if}}/g, "");
+  }
+  return content;
+}
 
 /**
  * MovieAgentExecutor implements the agent's core logic.
@@ -99,25 +123,41 @@ class MovieAgentExecutor implements AgentExecutor {
     };
     eventBus.publish(workingStatusUpdate);
 
-    // 3. Prepare messages for Genkit prompt
+    // 3. Prepare messages for OpenAI
     const historyForGenkit = contexts.get(contextId) || [];
     if (!historyForGenkit.find(m => m.messageId === userMessage.messageId)) {
       historyForGenkit.push(userMessage);
     }
     contexts.set(contextId, historyForGenkit)
 
-    const messages: MessageData[] = historyForGenkit
-      .map((m) => ({
-        role: (m.role === 'agent' ? 'model' : 'user') as 'user' | 'model',
-        content: m.parts
-          .filter((p): p is TextPart => p.kind === 'text' && !!(p as TextPart).text)
-          .map((p) => ({
-            text: (p as TextPart).text,
-          })),
-      }))
-      .filter((m) => m.content.length > 0);
+    type ChatMessage = {
+      role: 'system' | 'user' | 'assistant' | 'tool';
+      content?: string | null;
+      tool_call_id?: string;
+      // @ts-ignore: allow tool_calls when role is assistant
+      tool_calls?: any;
+    };
 
-    if (messages.length === 0) {
+    const systemPrompt = renderSystemPrompt(
+      (existingTask?.metadata?.goal as string | undefined) ||
+        (userMessage.metadata?.goal as string | undefined)
+    );
+
+    const oaiMessages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...historyForGenkit
+        .map((m) => ({
+          role: (m.role === 'agent' ? 'assistant' : 'user') as 'user' | 'assistant',
+          content: m.parts
+            .filter((p): p is TextPart => p.kind === 'text' && !!(p as TextPart).text)
+            .map((p) => (p as TextPart).text)
+            .join('\n') || null,
+        }))
+        .filter((m) => !!m.content),
+    ];
+
+    const hasUserText = oaiMessages.some((m) => m.role === 'user' && !!m.content && m.content.trim().length > 0);
+    if (!hasUserText) {
       console.warn(
         `[MovieAgentExecutor] No valid text messages found in history for task ${taskId}.`
       );
@@ -143,17 +183,56 @@ class MovieAgentExecutor implements AgentExecutor {
       return;
     }
 
-    const goal = existingTask?.metadata?.goal as string | undefined || userMessage.metadata?.goal as string | undefined;
-
     try {
-      // 4. Run the Genkit prompt
-      const response = await movieAgentPrompt(
-        { goal: goal, now: new Date().toISOString() },
-        {
-          messages,
-          tools: [searchMovies, searchPeople],
+      // 4. Call OpenAI with function tools, handle tool calls loop
+      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+      let assistantText: string | null = null;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const completion = await client.chat.completions.create({
+          model,
+          messages: oaiMessages as any,
+          tools: openAiToolDefinitions as any,
+        });
+
+        const msg = completion.choices?.[0]?.message;
+        if (!msg) {
+          throw new Error('OpenAI returned no message');
         }
-      );
+
+        const toolCalls = msg.tool_calls || [];
+        if (toolCalls.length > 0) {
+          // Add the assistant message that requested tool calls
+          oaiMessages.push({
+            role: 'assistant',
+            content: msg.content ?? null,
+            // @ts-ignore
+            tool_calls: toolCalls,
+          });
+
+          for (const call of toolCalls) {
+            const name = call.function?.name as string;
+            const id = call.id as string;
+            const argsJson = call.function?.arguments || '{}';
+            let args: any = {};
+            try { args = JSON.parse(argsJson); } catch {}
+            const handler = openAiToolHandlers[name];
+            if (!handler) {
+              oaiMessages.push({ role: 'tool', tool_call_id: id, content: `Unknown tool: ${name}` });
+              continue;
+            }
+            const result = await handler(args);
+            oaiMessages.push({ role: 'tool', tool_call_id: id, content: JSON.stringify(result) });
+          }
+          // Continue loop for another model turn
+          continue;
+        }
+
+        assistantText = msg.content ?? '';
+        break;
+      }
 
       // Check if the request has been cancelled
       if (this.cancelledTasks.has(taskId)) {
@@ -172,8 +251,7 @@ class MovieAgentExecutor implements AgentExecutor {
         eventBus.publish(cancelledUpdate);
         return;
       }
-
-      const responseText = response.text; // Access the text property using .text()
+      const responseText = assistantText || '';
       console.info(`[MovieAgentExecutor] Prompt response: ${responseText}`);
       const lines = responseText.trim().split('\n');
       const finalStateLine = lines.at(-1)?.trim().toUpperCase();

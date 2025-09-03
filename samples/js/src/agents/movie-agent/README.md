@@ -1,10 +1,14 @@
 # Movie Info Agent
 
-This agent uses the TMDB API to answer questions about movies. To run:
+This agent uses the TMDB API to answer questions about movies. To run with a .env file:
 
 ```bash
-export TMDB_API_KEY=<api_key> # see https://developer.themoviedb.org/docs/getting-started
-export GEMINI_API_KEY=<api_key>
+cp ../../.env.example ../../.env # or create your own .env
+echo "OPENAI_API_KEY=sk-..." >> ../../.env
+echo "TMDB_API_KEY=..." >> ../../.env # v3 key
+# or use a v4 token instead of TMDB_API_KEY
+# echo "TMDB_API_TOKEN=ey..." >> ../../.env
+
 npm run agents:movie-agent
 ```
 
