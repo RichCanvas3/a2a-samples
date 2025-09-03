@@ -5,7 +5,12 @@
     "skipLibCheck": true,
     "outDir": "dist",
     "esModuleInterop": true, // Often helpful with NodeNext
-    "resolveJsonModule": true // Good practice for importing JSON if needed
+    "resolveJsonModule": true, // Good practice for importing JSON if needed
+    "baseUrl": "./src",
+    "paths": {
+      "@/*": ["*"],
+      "@/lib/*": ["lib/*"]
+    }
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts"]
 }
