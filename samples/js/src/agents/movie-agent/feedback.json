@@ -1,5 +1,16 @@
 [
   {
+    "feedbackAuthId": "0xbefaaca54f3194485dd4d99e7b0444ddb97fc66054875e3cdda7b88246a805cc",
+    "agentSkillId": "finder:v1",
+    "taskId": "",
+    "contextId": "",
+    "rating": 100,
+    "domain": "movieassistant.localhost:3001",
+    "notes": "perfect",
+    "id": 8,
+    "createdAt": "2025-09-04T20:49:05.512Z"
+  },
+  {
     "feedbackAuthId": "0xc9b1564e4f63c1d4fc5e4eab205208b35a505d35b8a88df81b396ad5988d98b6",
     "agentSkillId": "finder:v1",
     "taskId": "",

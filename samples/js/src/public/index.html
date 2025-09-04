@@ -351,11 +351,11 @@
                     <h3>🔐 Feedback Auth Test</h3>
                     <div class="form-group">
                         <label for="clientId">Client Agent ID:</label>
-                        <input type="number" id="clientId" value="1">
+                        <input type="number" id="clientId" value="">
                     </div>
                     <div class="form-group">
                         <label for="serverId">Server Agent ID:</label>
-                        <input type="number" id="serverId" value="4">
+                        <input type="number" id="serverId" value="">
                     </div>
                     <button onclick="getFeedbackAuthId()" class="btn">Get Feedback Auth ID</button>
                     <div id="authResult" style="margin-top: 10px;"></div>
@@ -384,10 +384,28 @@
         document.addEventListener('DOMContentLoaded', function() {
             loadFeedback();
             checkAgentStatus();
+            loadDefaultAgentIds();
             
             // Setup form submission
             document.getElementById('feedbackForm').addEventListener('submit', handleFeedbackSubmit);
         });
+
+        // Load default agent IDs from environment variables
+        async function loadDefaultAgentIds() {
+            try {
+                const response = await fetch('/api/config/agent-ids');
+                if (response.ok) {
+                    const config = await response.json();
+                    document.getElementById('clientId').value = config.clientId;
+                    document.getElementById('serverId').value = config.serverId;
+                }
+            } catch (error) {
+                console.warn('Failed to load default agent IDs:', error);
+                // Fallback to hardcoded defaults
+                document.getElementById('clientId').value = '1';
+                document.getElementById('serverId').value = '4';
+            }
+        }
 
         // Show status message
         function showStatus(message, type = 'info') {

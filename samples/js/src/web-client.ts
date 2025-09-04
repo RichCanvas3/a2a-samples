@@ -34,6 +34,14 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Get default agent IDs from environment variables
+app.get('/api/config/agent-ids', (req, res) => {
+  res.json({
+    clientId: process.env.AGENT_CLIENT_ID || '1',
+    serverId: process.env.AGENT_SERVER_ID || '4'
+  });
+});
+
 // Feedback endpoint
 app.get('/.well-known/feedback.json', (req, res) => {
   try {

@@ -375,8 +375,10 @@ async function main() {
   // Attempt to submit an acceptFeedback operation via delegation on startup
   try {
     console.info('***************  attempt to submit an acceptFeedback operation via delegation on startup')
-    await acceptFeedbackWithDelegation({ agentClientId: 1n, agentServerId: 4n });
-    console.log('[MovieAgent] acceptFeedbackWithDelegation submitted for clientId=1, serverId=4');
+    const agentClientId = BigInt(process.env.AGENT_CLIENT_ID || '1');
+    const agentServerId = BigInt(process.env.AGENT_SERVER_ID || '4');
+    await acceptFeedbackWithDelegation({ agentClientId, agentServerId });
+    console.log(`[MovieAgent] acceptFeedbackWithDelegation submitted for clientId=${agentClientId}, serverId=${agentServerId}`);
   } catch (err: any) {
     console.warn('[MovieAgent] acceptFeedbackWithDelegation skipped:', err?.message || err);
   }
