@@ -54,8 +54,10 @@ export function loadSessionPackage(): SessionPackage {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const p = path.join(__dirname, 'sessionPackage.json.secret');
+  console.info('*************** loadSessionPackage: reading from:', p);
   const raw = fs.readFileSync(p, 'utf-8');
   const parsed = JSON.parse(raw);
+  console.info('*************** loadSessionPackage: caveats loaded:', parsed.signedDelegation?.message?.caveats);
   return parsed as SessionPackage;
 }
 

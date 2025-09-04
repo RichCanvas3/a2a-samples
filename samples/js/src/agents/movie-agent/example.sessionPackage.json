@@ -1,0 +1,26 @@
+{
+    "chainId": 11155111,
+    "aa": "0x64DBb2543A43dE1A2004d52071E6b4CD16b67D05",
+    "sessionAA": "0x3988B7e82b1b550251F8B2Bdb2448c396e6fd04A",
+    "reputationRegistry": "0xCA77EDF9aB1532679d4b86517D007F38FBBA8EE6",
+    "selector": "0x8524d988",
+    "sessionKey": {
+      "privateKey": "...",
+      "address": "0xC95Ce9A31D5B617749EDC4FE284B736E302fBEdd",
+      "validAfter": 1757018315,
+      "validUntil": 1757020175
+    },
+    "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+    "bundlerUrl": "https://api.pimlico.io/v2/11155111/rpc?apikey=...",
+    "signedDelegation": {
+      "message": {
+        "delegate": "0x3988B7e82b1b550251F8B2Bdb2448c396e6fd04A",
+        "delegator": "0x64DBb2543A43dE1A2004d52071E6b4CD16b67D05",
+        "authority": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "caveats": [],
+        "salt": "0x",
+        "signature": "0x"
+      },
+      "signature": "0x5c53b0392ae8da7c30e9689ee69afed4e6902e9ee37118c22454eeb137f6191c140aef1e8ac207019dbd65c6bbc4362edc941d90f3f69af45572517aa13ce43f1c"
+    }
+  }

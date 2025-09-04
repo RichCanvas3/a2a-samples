@@ -374,6 +374,8 @@ async function encodeDelegationRedeem(params: {
   const normalizeSignedDelegation = (sd: any) => {
     if (sd && sd.message && typeof sd.message === 'object') {
       const { delegate, delegator, authority, caveats, salt } = sd.message;
+      console.info('*************** normalizeSignedDelegation: caveats from message:', JSON.stringify(caveats, null, 2));
+      
       return {
         delegate,
         delegator,
@@ -404,6 +406,7 @@ export async function acceptFeedbackWithDelegation(params: {
 }): Promise<`0x${string}`> {
   const { agentClientId, agentServerId, agentAccount } = params;
   const sp = buildDelegationSetup();
+  console.info('*************** buildDelegationSetup: sp.signedDelegation:', JSON.stringify(sp.signedDelegation, null, 2));
   const senderAA = (sp.sessionAA || sp.aa) as `0x${string}`;
 
   // Encode the target contract call

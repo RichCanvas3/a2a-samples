@@ -296,15 +296,6 @@
                         <textarea id="comment" placeholder="Share your feedback about the movie recommendations..." required></textarea>
                     </div>
 
-                    <div class="form-group">
-                        <label for="agentId">Agent ID (optional):</label>
-                        <input type="number" id="agentId" placeholder="Leave empty to use default">
-                    </div>
-
-                    <div class="form-group">
-                        <label for="domain">Domain (optional):</label>
-                        <input type="text" id="domain" placeholder="Leave empty to use default">
-                    </div>
 
                     <button type="submit" class="btn btn-success">Add Feedback</button>
                 </form>
@@ -425,8 +416,6 @@
             
             const rating = document.getElementById('rating').value;
             const comment = document.getElementById('comment').value;
-            const agentId = document.getElementById('agentId').value;
-            const domain = document.getElementById('domain').value;
             
             try {
                 const response = await fetch('/api/feedback', {
@@ -436,9 +425,7 @@
                     },
                     body: JSON.stringify({
                         rating: parseInt(rating),
-                        comment,
-                        ...(agentId && { agentId: parseInt(agentId) }),
-                        ...(domain && { domain })
+                        comment
                     })
                 });
                 
