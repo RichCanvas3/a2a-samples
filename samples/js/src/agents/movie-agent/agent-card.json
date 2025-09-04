@@ -1,0 +1,50 @@
+{
+    "name": "Movie Agent",
+    "description": "An agent that can answer questions about movies and actors using TMDB.",
+    "url": "http://moviereview.localhost:41241/",
+    "version": "0.0.2",
+    "skills": [
+      {
+        "id": "general_movie_chat",
+        "name": "General Movie Chat",
+        "description": "Answer general questions or chat about movies, actors, directors.",
+        "tags": [
+          "movies,",
+          "actors,",
+          "directors"
+        ],
+        "examples": [
+          "Tell me about the plot of Inception.,",
+          "Recommend a good sci-fi movie.,",
+          "Who directed The Matrix?,",
+          "What other movies has Scarlett Johansson been in?,",
+          "Find action movies starring Keanu Reeves,",
+          "Which came out first, Jurassic Park or Terminator 2?\""
+        ],
+        "inputModes": [],
+        "outputModes": []
+      }
+    ],
+    "registrations": [
+      {
+        "agentId": 10,
+        "agentAddress": "eip155:11155111:0x64DBb2543A43dE1A2004d52071E6b4CD16b67D05",
+        "signature": "0xb24a1d98e29372d2167f4fa51377da38d535360f82febb8704525a3f11c33a834e166bc1d2f352f65e125a1ab0e105435871be5903e5d6d995d88d6247deed921c"
+      }
+    ],
+    "trustModels": [
+      "feedback"
+    ],
+    "capabilities": {
+      "streaming": true,
+      "pushNotifications": false,
+      "stateTransitionHistory": true
+    },
+    "defaultInputModes": [
+      "text"
+    ],
+    "defaultOutputModes": [
+      "text, task-status"
+    ],
+    "supportsAuthenticatedExtendedCard": false
+  }

@@ -4,6 +4,7 @@ import "dotenv/config";
 import express from "express";
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 import { getFeedbackDatabase } from "./agents/movie-agent/feedbackStorage.js";
 import { getFeedbackAuthId, acceptFeedbackWithDelegation, addFeedback } from "./agents/movie-agent/agentAdapter.js";
 
@@ -12,6 +13,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.WEB_CLIENT_PORT || 3001;
+const HOST = process.env.HOST || 'movieassitant.localhost';
 
 // Middleware
 app.use(express.json());
@@ -40,6 +42,18 @@ app.get('/api/config/agent-ids', (req, res) => {
     clientId: process.env.AGENT_CLIENT_ID || '1',
     serverId: process.env.AGENT_SERVER_ID || '4'
   });
+});
+
+// Agent card endpoint
+app.get('/.well-known/agent.json', (req, res) => {
+  try {
+    const agentCardPath = path.join(__dirname, 'web-client-agent-card.json');
+    const agentCard = JSON.parse(fs.readFileSync(agentCardPath, 'utf8'));
+    res.json(agentCard);
+  } catch (error) {
+    console.error('Error serving agent card:', error);
+    res.status(500).json({ error: 'Failed to load agent card' });
+  }
 });
 
 // Feedback endpoint
@@ -192,9 +206,9 @@ app.get('/api/movie-agent/status', async (req, res) => {
 });
 
 // Start the server
-app.listen(PORT, () => {
-  console.log(`[WebClient] Server started on http://localhost:${PORT}`);
-  console.log(`[WebClient] Feedback Endpoint: http://localhost:${PORT}/.well-known/feedback.json`);
-  console.log(`[WebClient] Web Interface: http://localhost:${PORT}`);
-  console.log(`[WebClient] API Documentation: http://localhost:${PORT}/api`);
+app.listen(PORT, HOST, () => {
+  console.log(`[WebClient] Server started on http://${HOST}:${PORT}`);
+  console.log(`[WebClient] Feedback Endpoint: http://${HOST}:${PORT}/.well-known/feedback.json`);
+  console.log(`[WebClient] Web Interface: http://${HOST}:${PORT}`);
+  console.log(`[WebClient] API Documentation: http://${HOST}:${PORT}/api`);
 });

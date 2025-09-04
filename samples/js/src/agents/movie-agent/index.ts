@@ -400,11 +400,27 @@ async function main() {
   const appBuilder = new A2AExpressApp(requestHandler);
   const expressApp = appBuilder.setupRoutes(express() as any);
 
+  // 4.5. Add static agent card endpoint
+  const fs = require('fs');
+  const path = require('path');
+  
+  expressApp.get('/.well-known/agent.json', (req: any, res: any) => {
+    try {
+      const agentCardPath = path.join(__dirname, 'agent-card.json');
+      const agentCard = JSON.parse(fs.readFileSync(agentCardPath, 'utf8'));
+      res.json(agentCard);
+    } catch (error) {
+      console.error('Error serving agent card:', error);
+      res.status(500).json({ error: 'Failed to load agent card' });
+    }
+  });
+
   // 5. Start the server
   const PORT = process.env.PORT || 41241;
-  expressApp.listen(PORT, () => {
-    console.log(`[MovieAgent] Server using new framework started on http://localhost:${PORT}`);
-    console.log(`[MovieAgent] Agent Card: http://localhost:${PORT}/.well-known/agent.json`);
+  const HOST = process.env.HOST || 'moviereview.localhost';
+  expressApp.listen(PORT, HOST, () => {
+    console.log(`[MovieAgent] Server using new framework started on http://${HOST}:${PORT}`);
+    console.log(`[MovieAgent] Agent Card: http://${HOST}:${PORT}/.well-known/agent.json`);
     console.log('[MovieAgent] Press Ctrl+C to stop the server');
   });
 }
