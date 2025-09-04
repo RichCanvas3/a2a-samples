@@ -19,6 +19,8 @@ import {
   Part, // Added for explicit Part typing
 } from "@a2a-js/sdk";
 import { A2AClient } from "@a2a-js/sdk/client";
+import { getFeedbackAuthId, acceptFeedbackWithDelegation, addFeedback } from "./agents/movie-agent/agentAdapter.js";
+import { getFeedbackDatabase } from "./agents/movie-agent/feedbackStorage.js";
 
 // --- ANSI Colors ---
 const colors = {
@@ -201,6 +203,33 @@ async function main() {
   console.log(
     colorize("green", `Enter messages, or use '/new' to start a new session. '/exit' to quit.`)
   );
+  console.log(
+    colorize("cyan", `Available commands:`)
+  );
+  console.log(
+    colorize("cyan", `  /new - Start a new session`)
+  );
+  console.log(
+    colorize("cyan", `  /exit - Quit the CLI`)
+  );
+  console.log(
+    colorize("cyan", `  /feedback-auth <clientId> <serverId> - Get feedback auth ID`)
+  );
+  console.log(
+    colorize("cyan", `  /accept-feedback <clientId> <serverId> - Accept feedback via delegation`)
+  );
+  console.log(
+    colorize("cyan", `  /add-feedback <rating> <comment> [agentId] [domain] - Add feedback record`)
+  );
+  console.log(
+    colorize("cyan", `  /list-feedback - List all feedback records`)
+  );
+  console.log(
+    colorize("cyan", `  /feedback-stats - Show feedback statistics`)
+  );
+  console.log(
+    colorize("cyan", `  /test-feedback-endpoint [port] - Test the feedback JSON endpoint`)
+  );
 
   rl.setPrompt(colorize("cyan", `${agentName} > You: `)); // Set initial prompt
   rl.prompt();
@@ -226,6 +255,208 @@ async function main() {
 
     if (input.toLowerCase() === "/exit") {
       rl.close();
+      return;
+    }
+
+    // Handle /feedback-auth command
+    if (input.toLowerCase().startsWith("/feedback-auth")) {
+      const parts = input.split(" ");
+      if (parts.length !== 3) {
+        console.log(colorize("red", "Usage: /feedback-auth <clientAgentId> <serverAgentId>"));
+        rl.prompt();
+        return;
+      }
+      
+      try {
+        const clientAgentId = BigInt(parts[1]);
+        const serverAgentId = BigInt(parts[2]);
+        
+        console.log(colorize("yellow", `Getting feedback auth ID for client=${clientAgentId}, server=${serverAgentId}...`));
+        
+        const feedbackAuthId = await getFeedbackAuthId({
+          clientAgentId,
+          serverAgentId
+        });
+        
+        if (feedbackAuthId) {
+          console.log(colorize("green", `Feedback Auth ID: ${feedbackAuthId}`));
+        } else {
+          console.log(colorize("yellow", "No feedback auth ID found (null or zero result)"));
+        }
+      } catch (error: any) {
+        console.log(colorize("red", `Error: ${error?.message || error}`));
+      }
+      
+      rl.prompt();
+      return;
+    }
+
+    // Handle /accept-feedback command
+    if (input.toLowerCase().startsWith("/accept-feedback")) {
+      const parts = input.split(" ");
+      if (parts.length !== 3) {
+        console.log(colorize("red", "Usage: /accept-feedback <clientAgentId> <serverAgentId>"));
+        rl.prompt();
+        return;
+      }
+      
+      try {
+        const clientAgentId = BigInt(parts[1]);
+        const serverAgentId = BigInt(parts[2]);
+        
+        console.log(colorize("yellow", `Accepting feedback for client=${clientAgentId}, server=${serverAgentId}...`));
+        
+        const userOpHash = await acceptFeedbackWithDelegation({
+          agentClientId: clientAgentId,
+          agentServerId: serverAgentId
+        });
+        
+        console.log(colorize("green", `Feedback accepted! UserOp Hash: ${userOpHash}`));
+      } catch (error: any) {
+        console.log(colorize("red", `Error: ${error?.message || error}`));
+      }
+      
+      rl.prompt();
+      return;
+    }
+
+    // Handle /add-feedback command
+    if (input.toLowerCase().startsWith("/add-feedback")) {
+      const parts = input.split(" ");
+      if (parts.length < 3) {
+        console.log(colorize("red", "Usage: /add-feedback <rating> <comment> [agentId] [domain]"));
+        console.log(colorize("red", "  rating: 1-5 scale"));
+        console.log(colorize("red", "  agentId and domain are optional (use env vars or defaults)"));
+        rl.prompt();
+        return;
+      }
+      
+      try {
+        const rating = parseInt(parts[1]);
+        const comment = parts.slice(2).join(" ");
+        
+        if (rating < 1 || rating > 5) {
+          console.log(colorize("red", "Rating must be between 1 and 5"));
+          rl.prompt();
+          return;
+        }
+        
+        // Optional parameters
+        const agentId = parts.length > 3 ? BigInt(parts[2]) : undefined;
+        const domain = parts.length > 4 ? parts[3] : undefined;
+        
+        console.log(colorize("yellow", `Adding feedback with rating=${rating}...`));
+        if (agentId) console.log(colorize("yellow", `  Agent ID: ${agentId}`));
+        if (domain) console.log(colorize("yellow", `  Domain: ${domain}`));
+        
+        const result = await addFeedback({
+          rating,
+          comment,
+          ...(agentId && { agentId }),
+          ...(domain && { domain })
+        });
+        
+        if (result.status === 'ok') {
+          console.log(colorize("green", `Feedback added successfully! ID: ${result.feedbackId}`));
+          console.log(colorize("green", `  Agent ID: ${result.agentId}`));
+          console.log(colorize("green", `  Domain: ${result.domain}`));
+        } else {
+          console.log(colorize("red", `Failed to add feedback: ${result.status}`));
+        }
+      } catch (error: any) {
+        console.log(colorize("red", `Error: ${error?.message || error}`));
+      }
+      
+      rl.prompt();
+      return;
+    }
+
+    // Handle /list-feedback command
+    if (input.toLowerCase().startsWith("/list-feedback")) {
+      try {
+        const feedbackDb = getFeedbackDatabase();
+        const allFeedback = await feedbackDb.getAllFeedback();
+        
+        if (allFeedback.length === 0) {
+          console.log(colorize("yellow", "No feedback records found"));
+        } else {
+          console.log(colorize("cyan", `Found ${allFeedback.length} feedback records:`));
+          allFeedback.forEach((record, index) => {
+            console.log(colorize("bright", `${index + 1}. ID: ${record.id}`));
+            console.log(`   Domain: ${record.domain}`);
+            console.log(`   Rating: ${record.rating}% (${record.rating / 20}/5 stars)`);
+            console.log(`   Notes: ${record.notes}`);
+            console.log(`   Created: ${record.createdAt}`);
+            console.log(`   Auth ID: ${record.feedbackAuthId}`);
+            console.log("");
+          });
+        }
+      } catch (error: any) {
+        console.log(colorize("red", `Error: ${error?.message || error}`));
+      }
+      
+      rl.prompt();
+      return;
+    }
+
+    // Handle /feedback-stats command
+    if (input.toLowerCase().startsWith("/feedback-stats")) {
+      try {
+        const feedbackDb = getFeedbackDatabase();
+        const stats = await feedbackDb.getFeedbackStats();
+        
+        console.log(colorize("cyan", "Feedback Statistics:"));
+        console.log(`Total feedback records: ${stats.total}`);
+        console.log(`Average rating: ${stats.averageRating.toFixed(1)}% (${(stats.averageRating / 20).toFixed(1)}/5 stars)`);
+        
+        if (Object.keys(stats.byDomain).length > 0) {
+          console.log(colorize("bright", "\nBy Domain:"));
+          Object.entries(stats.byDomain).forEach(([domain, count]) => {
+            console.log(`  ${domain}: ${count} records`);
+          });
+        }
+        
+        if (Object.keys(stats.byRating).length > 0) {
+          console.log(colorize("bright", "\nBy Rating:"));
+          Object.entries(stats.byRating).forEach(([rating, count]) => {
+            const stars = parseInt(rating) / 20;
+            console.log(`  ${stars}/5 stars (${rating}%): ${count} records`);
+          });
+        }
+      } catch (error: any) {
+        console.log(colorize("red", `Error: ${error?.message || error}`));
+      }
+      
+      rl.prompt();
+      return;
+    }
+
+    // Handle /test-feedback-endpoint command
+    if (input.toLowerCase().startsWith("/test-feedback-endpoint")) {
+      try {
+        const parts = input.split(" ");
+        const port = parts[1] || '41241';
+        const endpoint = `http://localhost:${port}/.well-known/feedback.json`;
+        
+        console.log(colorize("yellow", `Testing feedback endpoint: ${endpoint}`));
+        
+        const response = await fetch(endpoint);
+        const data = await response.json();
+        
+        if (response.ok) {
+          console.log(colorize("green", `✅ Endpoint working! Found ${data.length} feedback records`));
+          if (data.length > 0) {
+            console.log(colorize("cyan", "Sample record:"));
+            console.log(JSON.stringify(data[0], null, 2));
+          }
+        } else {
+          console.log(colorize("red", `❌ Endpoint error: ${response.status} ${response.statusText}`));
+        }
+      } catch (error: any) {
+        console.log(colorize("red", `❌ Error testing endpoint: ${error?.message || error}`));
+      }
+      
+      rl.prompt();
       return;
     }
 

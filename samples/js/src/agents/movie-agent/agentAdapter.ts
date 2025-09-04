@@ -21,6 +21,7 @@ import {
     Delegation
   } from "@metamask/delegation-toolkit";
 import { sepolia } from "viem/chains";
+import { getFeedbackDatabase, type FeedbackRecord } from './feedbackStorage.js';
 
 export type AgentInfo = {
   agentId: bigint;
@@ -347,6 +348,18 @@ export const reputationRegistryAbi = [
     ],
     outputs: [],
   },
+  {
+    type: 'function',
+    name: 'getFeedbackAuthId',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'clientAgentId', type: 'uint256' },
+      { name: 'serverAgentId', type: 'uint256' },
+    ],
+    outputs: [
+      { name: 'feedbackAuthId', type: 'bytes32' },
+    ],
+  },
 ] as const;
 
 async function encodeDelegationRedeem(params: {
@@ -459,6 +472,177 @@ export async function acceptFeedbackWithDelegation(params: {
   console.info("*************** sendSponsoredUserOperation: userOpHash", userOpHash);
 
   return userOpHash as `0x${string}`;
+}
+
+export async function getFeedbackAuthId(params: {
+  clientAgentId: bigint;
+  serverAgentId: bigint;
+  publicClient?: PublicClient;
+  reputationRegistry?: `0x${string}`;
+}): Promise<string | null> {
+  const { clientAgentId, serverAgentId } = params;
+  
+  const sp = buildDelegationSetup();
+  
+  // Use a more reliable Sepolia RPC URL
+
+  const publicClient = createPublicClient({
+    chain: sepolia,
+    transport: http(process.env.RPC_URL),
+  });
+
+  let reputationRegistry = params.reputationRegistry;
+  
+  if (!reputationRegistry) {
+    reputationRegistry = reputationRegistry || sp.reputationRegistry as `0x${string}`;
+  }
+
+  try {
+    console.info('ERC-8004: getFeedbackAuthId(client=%s, server=%s)', clientAgentId.toString(), serverAgentId.toString());
+    console.info('ERC-8004: reputationRegistry', reputationRegistry);
+
+    
+    // Test RPC connection first
+    console.info('ERC-8004: Testing RPC connection...');
+    const blockNumber = await publicClient.getBlockNumber();
+    console.info('ERC-8004: RPC connection OK, block number:', blockNumber.toString());
+    
+    // Add timeout to prevent hanging
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Contract call timeout after 10 seconds')), 10000);
+    });
+    
+    const contractPromise = publicClient.readContract({
+      address: reputationRegistry,
+      abi: reputationRegistryAbi,
+      functionName: 'getFeedbackAuthId',
+      args: [clientAgentId, serverAgentId],
+    }) as Promise<`0x${string}`>;
+    
+    console.info('ERC-8004: Making contract call...');
+    const result = await Promise.race([contractPromise, timeoutPromise]);
+
+    if (!result || result === '0x0000000000000000000000000000000000000000000000000000000000000000') {
+      console.info('ERC-8004: getFeedbackAuthId -> null (zero result)');
+      return null;
+    }
+
+    console.info('ERC-8004: getFeedbackAuthId -> %s', result);
+    return result;
+  } catch (error: any) {
+    console.info('ERC-8004: get_feedback_auth_id view failed: %s', error?.message || error);
+    return null;
+  }
+}
+
+export async function addFeedback(params: {
+  agentId?: bigint;
+  domain?: string;
+  rating: number; // 1-5 scale
+  comment: string;
+  feedbackAuthId?: string;
+  taskId?: string;
+  contextId?: string;
+  isReserve?: boolean;
+  proofOfPayment?: string;
+}): Promise<{
+  status: string;
+  agentId: string;
+  domain: string;
+  rating: number;
+  comment: string;
+  feedbackId?: number;
+}> {
+  const { rating, comment, feedbackAuthId, taskId, contextId, isReserve = false, proofOfPayment } = params;
+  
+  // Use environment variables or defaults
+  const agentId = params.agentId || BigInt(process.env.AGENT_CLIENT_ID || '1');
+  const domain = params.domain || process.env.AGENT_DOMAIN || 'movieassistant.localhost:12345';
+  
+  try {
+    console.info('ERC-8004: addFeedback(agentId=%s, domain=%s, rating=%s)', agentId.toString(), domain, rating);
+    
+    // Get chain ID from environment or default to Sepolia
+    const chainId = process.env.ERC8004_CHAIN_ID || '11155111';
+    
+    let finalFeedbackAuthId = feedbackAuthId;
+    
+    // Try to get feedback auth ID if not provided
+    if (!finalFeedbackAuthId) {
+      try {
+        // Get client and server agent IDs from environment or use defaults
+        const clientAgentId = BigInt(process.env.AGENT_CLIENT_ID || '1');
+        const serverAgentId = BigInt(process.env.AGENT_SERVER_ID || '4');
+        
+        console.info('ERC-8004: Attempting to get feedback auth ID for client=%s, server=%s', clientAgentId.toString(), serverAgentId.toString());
+        
+        // Call the actual getFeedbackAuthId function
+        const authId = await getFeedbackAuthId({
+          clientAgentId,
+          serverAgentId
+        });
+        
+        if (authId) {
+          finalFeedbackAuthId = authId;
+          console.info('ERC-8004: Retrieved feedback auth ID:', finalFeedbackAuthId);
+        } else {
+          // Fallback to CAIP-10 format if no auth ID found
+          const clientAddress = '0x0000000000000000000000000000000000000000'; // Placeholder
+          finalFeedbackAuthId = `eip155:${chainId}:${clientAddress}`;
+          console.info('ERC-8004: No auth ID found, using fallback:', finalFeedbackAuthId);
+        }
+      } catch (error: any) {
+        console.info('ERC-8004: Failed to get feedback auth ID:', error?.message || error);
+        // Fallback to CAIP-10 format
+        const clientAddress = '0x0000000000000000000000000000000000000000';
+        finalFeedbackAuthId = `eip155:${chainId}:${clientAddress}`;
+        console.info('ERC-8004: Using fallback feedback auth ID:', finalFeedbackAuthId);
+      }
+    }
+    
+    // Determine agent skill ID
+    const agentSkillId = isReserve ? 'reserve:v1' : 'finder:v1';
+    
+    // Convert rating from 1-5 scale to percentage (0-100)
+    const ratingPct = Math.max(0, Math.min(100, rating * 20));
+    
+    // Create feedback record
+    const feedbackRecord: Omit<FeedbackRecord, 'id' | 'createdAt'> = {
+      feedbackAuthId: finalFeedbackAuthId || '',
+      agentSkillId,
+      taskId: taskId || '',
+      contextId: contextId || '',
+      rating: ratingPct,
+      domain,
+      notes: comment,
+      proofOfPayment: proofOfPayment || undefined
+    };
+    
+    // Save to database
+    const feedbackDb = getFeedbackDatabase();
+    const feedbackId = feedbackDb.addFeedback(feedbackRecord);
+    
+    console.info('ERC-8004: Feedback saved with ID:', feedbackId);
+    
+    return {
+      status: 'ok',
+      agentId: agentId.toString(),
+      domain,
+      rating,
+      comment,
+      feedbackId
+    };
+    
+  } catch (error: any) {
+    console.info('ERC-8004: addFeedback failed:', error?.message || error);
+    return {
+      status: 'error',
+      agentId: agentId.toString(),
+      domain,
+      rating,
+      comment
+    };
+  }
 }
 
 

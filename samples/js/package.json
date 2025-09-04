@@ -10,6 +10,7 @@
   },
   "scripts": {
     "a2a:cli": "npx tsx src/cli.ts",
+    "web-client": "npx tsx src/web-client.ts",
     "agents:movie-agent": "npx tsx src/agents/movie-agent/index.ts",
     "agents:coder": "npx tsx src/agents/coder/index.ts",
     "agents:content-editor": "npx tsx src/agents/content-editor/index.ts"
@@ -25,6 +26,7 @@
     "express": "^4.21.2",
     "openai": "^4.56.0",
     "permissionless": "0.2.42",
+    "sqlite3": "^5.1.7",
     "uuid": "^11.0.3",
     "viem": "2.31.4"
   },

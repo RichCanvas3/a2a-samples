@@ -1,0 +1,46 @@
+[
+  {
+    "feedbackAuthId": "eip155:11155111:0x0000000000000000000000000000000000000000",
+    "agentSkillId": "finder:v1",
+    "taskId": "",
+    "contextId": "",
+    "rating": 40,
+    "domain": "movieassistant.localhost:12345",
+    "notes": "great ...",
+    "id": 4,
+    "createdAt": "2025-09-04T20:22:56.051Z"
+  },
+  {
+    "feedbackAuthId": "eip155:11155111:0x0000000000000000000000000000000000000000",
+    "agentSkillId": "finder:v1",
+    "taskId": "",
+    "contextId": "",
+    "rating": 60,
+    "domain": "movieassistant.localhost:12345",
+    "notes": "great movie",
+    "id": 3,
+    "createdAt": "2025-09-04T20:22:31.426Z"
+  },
+  {
+    "feedbackAuthId": "eip155:11155111:0x0000000000000000000000000000000000000000",
+    "agentSkillId": "finder:v1",
+    "taskId": "",
+    "contextId": "",
+    "rating": 60,
+    "domain": "movieassistant.localhost:12345",
+    "notes": "great movie",
+    "id": 2,
+    "createdAt": "2025-09-04T20:19:27.535Z"
+  },
+  {
+    "feedbackAuthId": "eip155:11155111:0x0000000000000000000000000000000000000000",
+    "agentSkillId": "finder:v1",
+    "taskId": "",
+    "contextId": "",
+    "rating": 60,
+    "domain": "movieassistant.localhost:12345",
+    "notes": "great movie",
+    "id": 1,
+    "createdAt": "2025-09-04T20:18:22.585Z"
+  }
+]
