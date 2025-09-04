@@ -557,7 +557,7 @@ export async function addFeedback(params: {
   
   // Use environment variables or defaults
   const agentId = params.agentId || BigInt(process.env.AGENT_CLIENT_ID || '1');
-  const domain = params.domain || process.env.AGENT_DOMAIN || 'movieassistant.localhost:12345';
+  const domain = params.domain || process.env.AGENT_DOMAIN || 'movieassistant.localhost:3001';
   
   try {
     console.info('ERC-8004: addFeedback(agentId=%s, domain=%s, rating=%s)', agentId.toString(), domain, rating);
@@ -569,6 +569,8 @@ export async function addFeedback(params: {
     
     // Try to get feedback auth ID if not provided
     if (!finalFeedbackAuthId) {
+      console.info('ERC-8004: No feedback auth ID provided, attempting to retrieve from contract...');
+      
       try {
         // Get client and server agent IDs from environment or use defaults
         const clientAgentId = BigInt(process.env.AGENT_CLIENT_ID || '1');
@@ -577,27 +579,33 @@ export async function addFeedback(params: {
         console.info('ERC-8004: Attempting to get feedback auth ID for client=%s, server=%s', clientAgentId.toString(), serverAgentId.toString());
         
         // Call the actual getFeedbackAuthId function
+        console.info('ERC-8004: Calling getFeedbackAuthId...');
         const authId = await getFeedbackAuthId({
           clientAgentId,
           serverAgentId
         });
         
-        if (authId) {
+        console.info('ERC-8004: getFeedbackAuthId returned:', authId, '(type:', typeof authId, ')');
+        
+        if (authId && authId !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
           finalFeedbackAuthId = authId;
-          console.info('ERC-8004: Retrieved feedback auth ID:', finalFeedbackAuthId);
+          console.info('ERC-8004: Retrieved valid feedback auth ID:', finalFeedbackAuthId);
         } else {
           // Fallback to CAIP-10 format if no auth ID found
           const clientAddress = '0x0000000000000000000000000000000000000000'; // Placeholder
           finalFeedbackAuthId = `eip155:${chainId}:${clientAddress}`;
-          console.info('ERC-8004: No auth ID found, using fallback:', finalFeedbackAuthId);
+          console.info('ERC-8004: No valid auth ID found (got:', authId, '), using fallback:', finalFeedbackAuthId);
         }
       } catch (error: any) {
+        console.error('ERC-8004: Exception in getFeedbackAuthId:', error);
         console.info('ERC-8004: Failed to get feedback auth ID:', error?.message || error);
         // Fallback to CAIP-10 format
         const clientAddress = '0x0000000000000000000000000000000000000000';
         finalFeedbackAuthId = `eip155:${chainId}:${clientAddress}`;
         console.info('ERC-8004: Using fallback feedback auth ID:', finalFeedbackAuthId);
       }
+    } else {
+      console.info('ERC-8004: Using provided feedback auth ID:', finalFeedbackAuthId);
     }
     
     // Determine agent skill ID
@@ -610,8 +618,8 @@ export async function addFeedback(params: {
     const feedbackRecord: Omit<FeedbackRecord, 'id' | 'createdAt'> = {
       feedbackAuthId: finalFeedbackAuthId || '',
       agentSkillId,
-      taskId: taskId || '',
-      contextId: contextId || '',
+      taskId: taskId ? String(taskId) : '',
+      contextId: contextId ? String(contextId) : '',
       rating: ratingPct,
       domain,
       notes: comment,
