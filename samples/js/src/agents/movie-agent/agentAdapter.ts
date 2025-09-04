@@ -1,9 +1,26 @@
-import { createPublicClient, createWalletClient, custom, http, defineChain, encodeFunctionData, zeroAddress, type Address, type Chain, type PublicClient } from "viem";
+import { createPublicClient, createWalletClient, custom, http, defineChain, encodeFunctionData, zeroAddress, toHex, type Address, type Chain, type PublicClient } from "viem";
 import { identityRegistryAbi } from "../../lib/abi/identityRegistry.js";
 import { createBundlerClient, createPaymasterClient } from 'viem/account-abstraction';
-import { createPimlicoClient } from 'permissionless/clients/pimlico';
-import { encodeNonce } from 'permissionless/utils';
 import { buildDelegationSetup } from './session.js';
+import { privateKeyToAccount } from 'viem/accounts';
+
+import {
+    Implementation,
+    toMetaMaskSmartAccount,
+    type MetaMaskSmartAccount,
+    type DelegationStruct,
+    type ExecutionStruct,
+    createDelegation,
+    type ToMetaMaskSmartAccountReturnType,
+    DelegationFramework,
+    SINGLE_DEFAULT_MODE,
+    getExplorerTransactionLink,
+    getExplorerAddressLink,
+    createExecution,
+    getDelegationHashOffchain,
+    Delegation
+  } from "@metamask/delegation-toolkit";
+import { sepolia } from "viem/chains";
 
 export type AgentInfo = {
   agentId: bigint;
@@ -234,10 +251,23 @@ export async function deploySmartAccountIfNeeded(params: {
   const { bundlerUrl, chain, account } = params;
   const isDeployed = await account.isDeployed();
   if (isDeployed) return false;
-  const pimlico = createPimlicoClient({ transport: http(bundlerUrl) } as any);
-  const bundlerClient = createBundlerClient({ transport: http(bundlerUrl), paymaster: true as any, chain: chain as any, paymasterContext: { mode: 'SPONSORED' } } as any);
-  const { fast } = await (pimlico as any).getUserOperationGasPrice();
-  const userOperationHash = await (bundlerClient as any).sendUserOperation({ account, calls: [{ to: zeroAddress }], ...fast });
+  const bundlerClient = createBundlerClient({ transport: http(bundlerUrl), chain: chain as any, paymaster: true as any, paymasterContext: { mode: 'SPONSORED' } } as any);
+  
+  // Set generous gas limits for deployment
+  const gasConfig = {
+    callGasLimit: 2000000n, // 2M gas for deployment (higher than regular calls)
+    verificationGasLimit: 2000000n, // 2M gas for verification
+    preVerificationGas: 200000n, // 200K gas for pre-verification
+    maxFeePerGas: 1000000000n, // 1 gwei max fee
+    maxPriorityFeePerGas: 1000000000n, // 1 gwei priority fee
+  };
+  
+  console.info('*************** deploySmartAccountIfNeeded with gas config:', gasConfig);
+  const userOperationHash = await (bundlerClient as any).sendUserOperation({ 
+    account, 
+    calls: [{ to: zeroAddress }],
+    ...gasConfig
+  });
   await (bundlerClient as any).waitForUserOperationReceipt({ hash: userOperationHash });
   return true;
 }
@@ -249,13 +279,34 @@ export async function sendSponsoredUserOperation(params: {
   calls: { to: `0x${string}`; data?: `0x${string}`; value?: bigint }[],
 }): Promise<`0x${string}`> {
   const { bundlerUrl, chain, account, calls } = params;
-  const key1 = BigInt(Date.now());
-  const nonce1 = encodeNonce({ key: key1, sequence: 0n });
   const paymasterClient = createPaymasterClient({ transport: http(bundlerUrl) } as any);
-  const pimlicoClient = createPimlicoClient({ transport: http(bundlerUrl) } as any);
-  const bundlerClient = createBundlerClient({ transport: http(bundlerUrl), paymaster: paymasterClient as any, chain: chain as any, paymasterContext: { mode: 'SPONSORED' } } as any);
-  const { fast: fee } = await (pimlicoClient as any).getUserOperationGasPrice();
-  const userOpHash = await (bundlerClient as any).sendUserOperation({ account, calls, nonce: nonce1 as any, paymaster: paymasterClient as any, ...fee });
+  const bundlerClient = createBundlerClient({
+    transport: http(process.env.BUNDLER_URL || ''),
+    paymaster: true,
+    chain: sepolia,
+    paymasterContext: {
+      mode:             'SPONSORED',
+    },
+  });
+
+  // Set generous gas limits for the user operation
+  const gasConfig = {
+    callGasLimit: 1000000n, // 1M gas for the call
+    verificationGasLimit: 1000000n, // 1M gas for verification
+    preVerificationGas: 100000n, // 100K gas for pre-verification
+    maxFeePerGas: 1000000000n, // 1 gwei max fee
+    maxPriorityFeePerGas: 1000000000n, // 1 gwei priority fee
+  };
+  
+  const userOpHash = await (bundlerClient as any).sendUserOperation({ 
+    account, 
+    calls, 
+    ...gasConfig
+  });
+  console.info("*************** sendSponsoredUserOperation: userOpHash", userOpHash);
+
+  const userOperationReceipt = await bundlerClient.waitForUserOperationReceipt({ hash: userOpHash });
+  console.info("*************** sendSponsoredUserOperation: userOperationReceipt", userOperationReceipt);
   return userOpHash as `0x${string}`;
 }
 
@@ -277,6 +328,7 @@ export async function ensureIdentityWithAA(params: {
   const agentAddress = await agentAccount.getAddress();
   const data = encodeNewAgent(domain.trim().toLowerCase(), agentAddress as `0x${string}`);
   await sendSponsoredUserOperation({ bundlerUrl, chain, account: agentAccount, calls: [{ to: registry, data, value: 0n }] });
+  console.info("*************** getAgentByDomain ********");
   const updated = await getAgentByDomain({ publicClient, registry, domain });
   console.log('********************* ensureIdentityWithAA: updated', updated);
   return (updated ?? agentAddress) as `0x${string}`;
@@ -298,43 +350,48 @@ export const reputationRegistryAbi = [
 ] as const;
 
 async function encodeDelegationRedeem(params: {
-  delegation: any;
-  executions: { target: `0x${string}`; value?: bigint; callData: `0x${string}` }[];
+  delegationChain: any[];
+  execution: ExecutionStruct;
 }): Promise<`0x${string}`> {
-  const { delegation, executions } = params;
-  // Attempt to use MetaMask Delegation Toolkit if available
-  try {
-    // Prefer a direct import if dependency is available at runtime
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    const mod = await import('@metamask/delegation-framework');
-    const data: `0x${string}` = mod.DelegationFramework.encode.redeemDelegations({
-      delegations: [ [delegation] ],
-      modes: [mod.SINGLE_DEFAULT_MODE],
-      executions: [executions],
-    });
-    return data;
-  } catch {
-    // Fallback to global if injected
-    const g: any = (globalThis as any);
-    if (g?.DelegationFramework?.encode?.redeemDelegations) {
-      return g.DelegationFramework.encode.redeemDelegations({
-        delegations: [ [delegation] ],
-        modes: [g.SINGLE_DEFAULT_MODE],
-        executions: [executions],
-      });
+  const { delegationChain, execution } = params;
+
+  // Normalize signed delegation shape: v0.11 expects a flat object
+  // { delegate, authority, caveats, salt, signature }
+  // whereas newer packages may provide { message: { ... }, signature }.
+  const normalizeSignedDelegation = (sd: any) => {
+    if (sd && sd.message && typeof sd.message === 'object') {
+      const { delegate, delegator, authority, caveats, salt } = sd.message;
+      return {
+        delegate,
+        delegator,
+        authority,
+        caveats: Array.isArray(caveats) ? caveats : [],
+        salt,
+        signature: sd.signature,
+      };
     }
-    throw new Error('MetaMask Delegation Toolkit not found. Install "@metamask/delegation-framework" or provide DelegationFramework globally.');
-  }
+    return sd;
+  };
+
+  const normalizedChain = delegationChain.map((sd) => normalizeSignedDelegation(sd));
+
+  console.info('***************  encodeDelegationRedeem: ', normalizedChain);
+  const data = DelegationFramework.encode.redeemDelegations({
+    delegations: [ normalizedChain ],
+    modes: [SINGLE_DEFAULT_MODE],
+    executions: [[execution]]
+  });
+  return data;
 }
 
 export async function acceptFeedbackWithDelegation(params: {
   agentClientId: bigint;
   agentServerId: bigint;
-  agentAccount: any; // Smart account configured for the session key
+  agentAccount?: any; // Smart account configured for the session key
 }): Promise<`0x${string}`> {
   const { agentClientId, agentServerId, agentAccount } = params;
   const sp = buildDelegationSetup();
+  const senderAA = (sp.sessionAA || sp.aa) as `0x${string}`;
 
   // Encode the target contract call
   const callData = encodeFunctionData({
@@ -343,33 +400,63 @@ export async function acceptFeedbackWithDelegation(params: {
     args: [agentClientId, agentServerId],
   });
 
-  const executions = [
-    {
-      target: sp.reputationRegistry as `0x${string}`,
-      value: 0n,
-      callData: callData as `0x${string}`,
-    },
-  ];
+  const execution = {
+    target: sp.reputationRegistry as `0x${string}`,
+    value: 0n,
+    callData: callData as `0x${string}`,
+  };
 
   // Wrap in delegation framework call data
-  const data = await encodeDelegationRedeem({
-    delegation: sp.signedDelegation,
-    executions,
-  });
+  let data: `0x${string}`;
+  try {
+    console.info('***************  encodeDelegationRedeem: ', sp.signedDelegation, execution);
+    data = await encodeDelegationRedeem({ delegationChain: [sp.signedDelegation], execution });
+    console.info('***************  encodeDelegationRedeem: ', data);
+  } catch (e: any) {
+    console.info('***************  encodeDelegationRedeem: error', e);
+    if (sp.delegationRedeemData) {
+      data = sp.delegationRedeemData as `0x${string}`;
+    } else {
+      throw e;
+    }
+  }
 
-  // Send sponsored UserOperation to the delegator/AA contract
+  // Build session smart account from sessionKey if not provided
+  let account = agentAccount;
+  if (!account) {
+    console.info('*************** construct session account toMetaMaskSmartAccount');
+    console.info("********** sp", sp.chain);
+    const owner = privateKeyToAccount(sp.sessionKey.privateKey);
+
+    const publicClient = createPublicClient({
+      chain: sepolia,
+      transport: http(sp.rpcUrl),
+    });
+
+    account = await toMetaMaskSmartAccount({
+      client: publicClient,
+      chain: sepolia,
+      implementation: Implementation.Hybrid,
+      deployParams: [owner.address, [], [], []],
+      signatory: { account: owner as any },
+      deploySalt: toHex(10),
+    } as any);
+  }
+
+
+
+  // data is guaranteed by encodeDelegationRedeem
+
   const userOpHash = await sendSponsoredUserOperation({
-    bundlerUrl: sp.bundlerUrl,
-    chain: sp.chain,
-    account: agentAccount,
+    bundlerUrl: process.env.BUNDLER_URL || '',
+    chain: sepolia,
+    account,
     calls: [
-      {
-        to: sp.aa as `0x${string}`,
-        data,
-        value: 0n,
-      },
+      { to: senderAA, data, value: 0n }
     ],
   });
+
+  console.info("*************** sendSponsoredUserOperation: userOpHash", userOpHash);
 
   return userOpHash as `0x${string}`;
 }

@@ -24,6 +24,7 @@ import {
   DefaultRequestHandler,
 } from "@a2a-js/sdk/server";
 import { openAiToolDefinitions, openAiToolHandlers } from "./tools.js";
+import { acceptFeedbackWithDelegation } from './agentAdapter.js';
 
 if (!process.env.OPENAI_API_KEY || !process.env.TMDB_API_KEY) {
   console.error("OPENAI_API_KEY and TMDB_API_KEY environment variables are required")
@@ -371,6 +372,15 @@ const movieAgentCard: AgentCard = {
 };
 
 async function main() {
+  // Attempt to submit an acceptFeedback operation via delegation on startup
+  try {
+    console.info('***************  attempt to submit an acceptFeedback operation via delegation on startup')
+    await acceptFeedbackWithDelegation({ agentClientId: 1n, agentServerId: 4n });
+    console.log('[MovieAgent] acceptFeedbackWithDelegation submitted for clientId=1, serverId=4');
+  } catch (err: any) {
+    console.warn('[MovieAgent] acceptFeedbackWithDelegation skipped:', err?.message || err);
+  }
+
   // 1. Create TaskStore
   const taskStore: TaskStore = new InMemoryTaskStore();
 
@@ -386,7 +396,7 @@ async function main() {
 
   // 4. Create and setup A2AExpressApp
   const appBuilder = new A2AExpressApp(requestHandler);
-  const expressApp = appBuilder.setupRoutes(express());
+  const expressApp = appBuilder.setupRoutes(express() as any);
 
   // 5. Start the server
   const PORT = process.env.PORT || 41241;

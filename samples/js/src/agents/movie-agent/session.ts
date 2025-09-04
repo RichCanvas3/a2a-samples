@@ -2,12 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { defineChain, http, createPublicClient, type Chain } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 type Hex = `0x${string}`;
 
 type SessionPackage = {
   chainId: number;
   aa: Hex; // smart account (delegator)
+  sessionAA?: Hex; // delegate smart account (optional)
   reputationRegistry: Hex;
   selector: Hex;
   sessionKey: {
@@ -18,6 +20,7 @@ type SessionPackage = {
   };
   entryPoint: Hex;
   bundlerUrl: string;
+  delegationRedeemData?: Hex; // optional pre-encoded redeemDelegations call data
   signedDelegation: {
     message: {
       delegate: Hex;
@@ -38,10 +41,12 @@ export type DelegationSetup = {
   bundlerUrl: string;
   entryPoint: Hex;
   aa: Hex;
+  sessionAA?: Hex;
   reputationRegistry: Hex;
   selector: Hex;
   sessionKey: SessionPackage['sessionKey'];
   signedDelegation: SessionPackage['signedDelegation'];
+  delegationRedeemData?: Hex;
   publicClient: any;
 };
 
@@ -96,12 +101,51 @@ export function buildDelegationSetup(pkg?: SessionPackage): DelegationSetup {
     bundlerUrl: session.bundlerUrl,
     entryPoint: session.entryPoint,
     aa: session.aa,
+    sessionAA: session.sessionAA,
     reputationRegistry: session.reputationRegistry,
     selector: session.selector,
     sessionKey: session.sessionKey,
     signedDelegation: session.signedDelegation,
+    delegationRedeemData: session.delegationRedeemData,
     publicClient,
   };
+}
+
+export async function buildAgentAccountFromSession(): Promise<any> {
+  const sp = buildDelegationSetup();
+  const client = createPublicClient({ transport: http(sp.rpcUrl) });
+  // Try multiple known builder APIs from permissionless/accounts to maximize compatibility across versions
+  let mod: any;
+  try {
+    mod = await import('permissionless/accounts');
+  } catch (e) {
+    throw new Error('permissionless/accounts not installed. Install it or provide agentAccount externally.');
+  }
+
+  const attempts: Array<() => Promise<any>> = [];
+  const owner = privateKeyToAccount(sp.sessionKey.privateKey);
+
+  
+  // Most recent APIs expect an owner Account, not raw privateKey
+  if (typeof mod?.toSimpleSmartAccount === 'function') {
+    attempts.push(() => mod.toSimpleSmartAccount({ client, owner, entryPoint: sp.entryPoint }));
+  }
+  if (typeof mod?.to7702SimpleSmartAccount === 'function') {
+    attempts.push(() => mod.to7702SimpleSmartAccount({ client, owner, entryPoint: sp.entryPoint }));
+  }
+  if (typeof mod?.privateKeyToSimpleSmartAccount === 'function') {
+    attempts.push(() => mod.privateKeyToSimpleSmartAccount({ client, privateKey: sp.sessionKey.privateKey, entryPoint: sp.entryPoint }));
+  }
+
+  for (const fn of attempts) {
+    try {
+      const account = await fn();
+      if (account) return account;
+    } catch {}
+  }
+
+  const available = Object.keys(mod || {});
+  throw new Error(`No compatible smart account builder found in permissionless/accounts. Available exports: ${available.join(', ')}`);
 }
 
 
