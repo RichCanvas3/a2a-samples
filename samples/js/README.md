@@ -9,6 +9,31 @@ The provided samples are built using [Genkit](https://genkit.dev/) using the Gem
 - [Content Editor Agent](src/agents/content-editor/README.md)  
     Sample agent to proof-read and polish content. To make use of this agent in a content creation multi-agent system, check out the [content_creation](../python/hosts/content_creation/README.md) sample.
 
+## Custom Domain Setup
+
+The Movie Agent and Web Client use custom localhost domains for testing. To use these domains, you need to add them to your system's hosts file:
+
+### Linux/macOS:
+```bash
+echo "127.0.0.1 moviereview.localhost" | sudo tee -a /etc/hosts
+echo "127.0.0.1 movieassitant.localhost" | sudo tee -a /etc/hosts
+```
+
+### Windows:
+Add these lines to `C:\Windows\System32\drivers\etc\hosts`:
+```
+127.0.0.1 moviereview.localhost
+127.0.0.1 movieassitant.localhost
+```
+
+### Verify the setup:
+```bash
+ping moviereview.localhost
+ping movieassitant.localhost
+```
+
+Both should resolve to `127.0.0.1`.
+
 ## Testing the Agents
 
 First, follow the instructions in the agent's README file, then run `npx tsx ./cli.ts` to start up a command-line client to talk to the agents. Example:
