@@ -1,7 +1,7 @@
 {
     "name": "movieassistant",
     "description": "movie assistant",
-    "url": "http://movieassitant.localhost:3001/",
+    "url": "http://movieassistant.localhost:3001/",
     "skills": [],
     "registrations": [
       {

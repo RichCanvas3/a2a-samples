@@ -401,10 +401,8 @@ async function main() {
   const expressApp = appBuilder.setupRoutes(express() as any);
 
   // 4.5. Add static agent card endpoint
-  const fs = require('fs');
-  const path = require('path');
   
-  expressApp.get('/.well-known/agent.json', (req: any, res: any) => {
+  expressApp.get('/.well-known/agent-card.json', (req: any, res: any) => {
     try {
       const agentCardPath = path.join(__dirname, 'agent-card.json');
       const agentCard = JSON.parse(fs.readFileSync(agentCardPath, 'utf8'));
@@ -420,7 +418,7 @@ async function main() {
   const HOST = process.env.HOST || 'moviereview.localhost';
   expressApp.listen(PORT, HOST, () => {
     console.log(`[MovieAgent] Server using new framework started on http://${HOST}:${PORT}`);
-    console.log(`[MovieAgent] Agent Card: http://${HOST}:${PORT}/.well-known/agent.json`);
+    console.log(`[MovieAgent] Agent Card: http://${HOST}:${PORT}/.well-known/agent-card.json`);
     console.log('[MovieAgent] Press Ctrl+C to stop the server');
   });
 }

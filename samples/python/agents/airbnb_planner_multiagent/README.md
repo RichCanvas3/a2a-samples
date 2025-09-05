@@ -78,6 +78,16 @@ Here are example questions:
 
 - "Please find a room in LA, CA, June 20-25, 2025, two adults"
 
+## API Endpoints
+
+The host agent provides the following API endpoints:
+
+- `/.well-known/agent_card.json` - Returns the agent card with capabilities and skills
+- `/.well-known/agent-ids` - Returns agent IDs and authorization status
+- `/.well-known/feedback.json` - Returns feedback records
+- `/` - Redirects to the UI at `/ui`
+- `/ui` - The main Gradio chat interface
+
 
 ## Disclaimer
 

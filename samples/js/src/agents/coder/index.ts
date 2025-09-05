@@ -354,7 +354,7 @@ async function main() {
   const PORT = process.env.CODER_AGENT_PORT || 41242; // Different port for coder agent
   expressApp.listen(PORT, () => {
     console.log(`[CoderAgent] Server using new framework started on http://localhost:${PORT}`);
-    console.log(`[CoderAgent] Agent Card: http://localhost:${PORT}/.well-known/agent.json`);
+    console.log(`[CoderAgent] Agent Card: http://localhost:${PORT}/.well-known/agent-card.json`);
     console.log('[CoderAgent] Press Ctrl+C to stop the server');
   });
 }

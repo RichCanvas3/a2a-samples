@@ -101,6 +101,18 @@ async def main():
             description='This assistant can help you to check weather and find airbnb accommodation',
             type='messages',
         )
+        
+        # API Links Footer
+        with gr.Row():
+            gr.HTML("""
+            <div style="text-align: right; margin-top: 20px; font-size: 12px; color: #666;">
+                <a href="/.well-known/agent_card.json" target="_blank" style="margin-right: 15px;">Agent Card</a>
+                <a href="/.well-known/feedback.json" target="_blank" style="margin-right: 15px;">Feedback JSON</a>
+                <a href="/.well-known/agent-ids" target="_blank" style="margin-right: 15px;">Agent Status</a>
+                <a href="/.well-known/feedback.json" target="_blank" style="margin-right: 15px;">Feedback API</a>
+                <a href="/.well-known/agent-ids" target="_blank">Stats API</a>
+            </div>
+            """)
 
     # Build FastAPI app and mount Gradio under a non-root path to avoid '//' redirects
     app = FastAPI()

@@ -16,20 +16,20 @@ The Movie Agent and Web Client use custom localhost domains for testing. To use 
 ### Linux/macOS:
 ```bash
 echo "127.0.0.1 moviereview.localhost" | sudo tee -a /etc/hosts
-echo "127.0.0.1 movieassitant.localhost" | sudo tee -a /etc/hosts
+echo "127.0.0.1 movieassistant.localhost" | sudo tee -a /etc/hosts
 ```
 
 ### Windows:
 Add these lines to `C:\Windows\System32\drivers\etc\hosts`:
 ```
 127.0.0.1 moviereview.localhost
-127.0.0.1 movieassitant.localhost
+127.0.0.1 movieassistant.localhost
 ```
 
 ### Verify the setup:
 ```bash
 ping moviereview.localhost
-ping movieassitant.localhost
+ping movieassistant.localhost
 ```
 
 Both should resolve to `127.0.0.1`.

@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.WEB_CLIENT_PORT || 3001;
-const HOST = process.env.HOST || 'movieassitant.localhost';
+const HOST = process.env.HOST || 'movieassistant.localhost';
 
 // Middleware
 app.use(express.json());
@@ -45,7 +45,7 @@ app.get('/api/config/agent-ids', (req, res) => {
 });
 
 // Agent card endpoint
-app.get('/.well-known/agent.json', (req, res) => {
+app.get('/.well-known/agent-card.json', (req, res) => {
   try {
     const agentCardPath = path.join(__dirname, 'web-client-agent-card.json');
     const agentCard = JSON.parse(fs.readFileSync(agentCardPath, 'utf8'));
@@ -179,7 +179,7 @@ app.post('/api/feedback/accept', async (req, res) => {
 app.get('/api/movie-agent/status', async (req, res) => {
   try {
     const movieAgentUrl = process.env.MOVIE_AGENT_URL || 'http://localhost:41241';
-    const response = await fetch(`${movieAgentUrl}/.well-known/agent.json`);
+    const response = await fetch(`${movieAgentUrl}/.well-known/agent-card.json`);
     
     if (response.ok) {
       const agentCard = await response.json();
