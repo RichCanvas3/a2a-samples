@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.WEB_CLIENT_PORT || 3001;
-const HOST = process.env.HOST || 'movieassistant.localhost';
+const HOST = process.env.HOST || 'movieclient.localhost';
 
 // Middleware
 app.use(express.json());
@@ -39,8 +39,8 @@ app.get('/', (req, res) => {
 // Get default agent IDs from environment variables
 app.get('/api/config/agent-ids', (req, res) => {
   res.json({
-    clientId: process.env.AGENT_CLIENT_ID || '1',
-    serverId: process.env.AGENT_SERVER_ID || '4'
+    clientId: process.env.AGENT_CLIENT_ID || '12',
+    serverId: process.env.AGENT_SERVER_ID || '11'
   });
 });
 

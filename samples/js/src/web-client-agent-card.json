@@ -1,13 +1,13 @@
 {
-    "name": "movieassistant",
-    "description": "movie assistant",
-    "url": "http://movieassistant.localhost:3001/",
+    "name": "movieclient",
+    "description": "movie client so get information about movie",
+    "version": "aa",
     "skills": [],
     "registrations": [
       {
-        "agentId": 9,
-        "agentAddress": "eip155:11155111:0xed2B7Cd820697528CeE8146b4160678A0775Bd5c",
-        "signature": "0x2368457e3ed013d8c9efef9ab82a1394cd13ea986ae03c923728832a7e2e78dc1a385df325ecca9b5af900f73c6b13d8d1a82227ece6c9024148e40a28c0bf261c"
+        "agentId": 12,
+        "agentAddress": "eip155:11155111:0xc5A7f772FbA8D53Da65AF1D6dbBFF438dDe6D1FC",
+        "signature": "0x35bce32afa3238bb790b39c0a880a1ef41dde0bcec7a4dd77c8fb82b56a1323b31aab8f3a525042950c33871fa3ce45dddb6337999c01200279f4c004dd836751c"
       }
     ],
     "trustModels": [
@@ -21,5 +21,5 @@
     "defaultInputModes": [],
     "defaultOutputModes": [],
     "supportsAuthenticatedExtendedCard": false,
-    "feedbackDataURI": "http://movieassistant.localhost:3001/.well-known/feedback.json"
+    "feedbackDataURI": "http://movieclient.localhost:3001/.well-known/feedback.json"
   }

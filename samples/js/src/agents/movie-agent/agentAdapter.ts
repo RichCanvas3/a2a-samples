@@ -559,8 +559,8 @@ export async function addFeedback(params: {
   const { rating, comment, feedbackAuthId, taskId, contextId, isReserve = false, proofOfPayment } = params;
   
   // Use environment variables or defaults
-  const agentId = params.agentId || BigInt(process.env.AGENT_CLIENT_ID || '1');
-  const domain = params.domain || process.env.AGENT_DOMAIN || 'movieassistant.localhost:3001';
+  const agentId = params.agentId || BigInt(process.env.AGENT_CLIENT_ID || '12');
+  const domain = params.domain || process.env.AGENT_DOMAIN || 'movieclient.localhost:3001';
   
   try {
     console.info('ERC-8004: addFeedback(agentId=%s, domain=%s, rating=%s)', agentId.toString(), domain, rating);
@@ -576,8 +576,8 @@ export async function addFeedback(params: {
       
       try {
         // Get client and server agent IDs from environment or use defaults
-        const clientAgentId = BigInt(process.env.AGENT_CLIENT_ID || '1');
-        const serverAgentId = BigInt(process.env.AGENT_SERVER_ID || '4');
+        const clientAgentId = BigInt(process.env.AGENT_CLIENT_ID || '12');
+        const serverAgentId = BigInt(process.env.AGENT_SERVER_ID || '11');
         
         console.info('ERC-8004: Attempting to get feedback auth ID for client=%s, server=%s', clientAgentId.toString(), serverAgentId.toString());
         

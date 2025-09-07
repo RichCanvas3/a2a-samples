@@ -415,7 +415,7 @@ async function main() {
 
   // 5. Start the server
   const PORT = process.env.PORT || 41241;
-  const HOST = process.env.HOST || 'moviereview.localhost';
+  const HOST = process.env.HOST || 'movieagent.localhost';
   expressApp.listen(PORT, HOST, () => {
     console.log(`[MovieAgent] Server using new framework started on http://${HOST}:${PORT}`);
     console.log(`[MovieAgent] Agent Card: http://${HOST}:${PORT}/.well-known/agent-card.json`);

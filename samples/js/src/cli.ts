@@ -212,24 +212,7 @@ async function main() {
   console.log(
     colorize("cyan", `  /exit - Quit the CLI`)
   );
-  console.log(
-    colorize("cyan", `  /feedback-auth <clientId> <serverId> - Get feedback auth ID`)
-  );
-  console.log(
-    colorize("cyan", `  /accept-feedback <clientId> <serverId> - Accept feedback via delegation`)
-  );
-  console.log(
-    colorize("cyan", `  /add-feedback <rating> <comment> [agentId] [domain] - Add feedback record`)
-  );
-  console.log(
-    colorize("cyan", `  /list-feedback - List all feedback records`)
-  );
-  console.log(
-    colorize("cyan", `  /feedback-stats - Show feedback statistics`)
-  );
-  console.log(
-    colorize("cyan", `  /test-feedback-endpoint [port] - Test the feedback JSON endpoint`)
-  );
+  
 
   rl.setPrompt(colorize("cyan", `${agentName} > You: `)); // Set initial prompt
   rl.prompt();

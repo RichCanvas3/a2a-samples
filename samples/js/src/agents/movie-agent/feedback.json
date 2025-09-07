@@ -1,11 +1,22 @@
 [
   {
+    "feedbackAuthId": "0x8165be0638147828e8e0c0b620eed37e4e8021cbf4928489910ffe61440a223b",
+    "agentSkillId": "finder:v1",
+    "taskId": "",
+    "contextId": "",
+    "rating": 100,
+    "domain": "movieclient.localhost:3001",
+    "notes": "this is a great service for movie information",
+    "id": 9,
+    "createdAt": "2025-09-05T13:15:16.549Z"
+  },
+  {
     "feedbackAuthId": "0xbefaaca54f3194485dd4d99e7b0444ddb97fc66054875e3cdda7b88246a805cc",
     "agentSkillId": "finder:v1",
     "taskId": "",
     "contextId": "",
     "rating": 100,
-    "domain": "movieassistant.localhost:3001",
+    "domain": "movieclient.localhost:3001",
     "notes": "perfect",
     "id": 8,
     "createdAt": "2025-09-04T20:49:05.512Z"
@@ -16,7 +27,7 @@
     "taskId": "",
     "contextId": "",
     "rating": 60,
-    "domain": "movieassistant.localhost:3001",
+    "domain": "movieclient.localhost:3001",
     "notes": "test3",
     "id": 7,
     "createdAt": "2025-09-04T20:32:45.035Z"
@@ -27,7 +38,7 @@
     "taskId": "",
     "contextId": "",
     "rating": 80,
-    "domain": "movieassistant.localhost:12345",
+    "domain": "movieclient.localhost:12345",
     "notes": "test2",
     "id": 6,
     "createdAt": "2025-09-04T20:31:00.539Z"
@@ -38,7 +49,7 @@
     "taskId": "",
     "contextId": "",
     "rating": 80,
-    "domain": "movieassistant.localhost:12345",
+    "domain": "movieclient.localhost:12345",
     "notes": "test",
     "id": 5,
     "createdAt": "2025-09-04T20:28:51.816Z"
@@ -49,7 +60,7 @@
     "taskId": "",
     "contextId": "",
     "rating": 40,
-    "domain": "movieassistant.localhost:12345",
+    "domain": "movieclient.localhost:12345",
     "notes": "great ...",
     "id": 4,
     "createdAt": "2025-09-04T20:22:56.051Z"
@@ -60,7 +71,7 @@
     "taskId": "",
     "contextId": "",
     "rating": 60,
-    "domain": "movieassistant.localhost:12345",
+    "domain": "movieclient.localhost:12345",
     "notes": "great movie",
     "id": 3,
     "createdAt": "2025-09-04T20:22:31.426Z"
@@ -71,7 +82,7 @@
     "taskId": "",
     "contextId": "",
     "rating": 60,
-    "domain": "movieassistant.localhost:12345",
+    "domain": "movieclient.localhost:12345",
     "notes": "great movie",
     "id": 2,
     "createdAt": "2025-09-04T20:19:27.535Z"
@@ -82,7 +93,7 @@
     "taskId": "",
     "contextId": "",
     "rating": 60,
-    "domain": "movieassistant.localhost:12345",
+    "domain": "movieclient.localhost:12345",
     "notes": "great movie",
     "id": 1,
     "createdAt": "2025-09-04T20:18:22.585Z"

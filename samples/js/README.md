@@ -15,21 +15,21 @@ The Movie Agent and Web Client use custom localhost domains for testing. To use 
 
 ### Linux/macOS:
 ```bash
-echo "127.0.0.1 moviereview.localhost" | sudo tee -a /etc/hosts
-echo "127.0.0.1 movieassistant.localhost" | sudo tee -a /etc/hosts
+echo "127.0.0.1 movieagent.localhost" | sudo tee -a /etc/hosts
+echo "127.0.0.1 movieclient.localhost" | sudo tee -a /etc/hosts
 ```
 
 ### Windows:
 Add these lines to `C:\Windows\System32\drivers\etc\hosts`:
 ```
-127.0.0.1 moviereview.localhost
-127.0.0.1 movieassistant.localhost
+127.0.0.1 movieagent.localhost
+127.0.0.1 movieclient.localhost
 ```
 
 ### Verify the setup:
 ```bash
-ping moviereview.localhost
-ping movieassistant.localhost
+ping movieagent.localhost
+ping movieclient.localhost
 ```
 
 Both should resolve to `127.0.0.1`.
@@ -76,3 +76,7 @@ application.
 
 Developers are responsible for implementing appropriate security measures, such as
 input validation and secure handling of credentials to protect their systems and users.
+
+
+
+echo "127.0.0.1 movieagent.localhost" | sudo tee -a /etc/hosts

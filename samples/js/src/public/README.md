@@ -1,4 +1,4 @@
-# Movie Agent Web Client
+# Movie Agent Feedback
 
 A web-based interface for interacting with the Movie Agent and managing feedback data.
 
@@ -47,9 +47,9 @@ WEB_CLIENT_PORT=3000
 MOVIE_AGENT_URL=http://localhost:41241
 
 # Agent configuration
-AGENT_DOMAIN=movieassistant.localhost:12345
-AGENT_CLIENT_ID=1
-AGENT_SERVER_ID=4
+AGENT_DOMAIN=movieclient.localhost:12345
+AGENT_CLIENT_ID=12
+AGENT_SERVER_ID=11
 
 # Blockchain configuration
 ERC8004_CHAIN_ID=11155111
@@ -85,7 +85,7 @@ BUNDLER_URL=https://api.pimlico.io/v2/11155111/rpc?apikey=your_key
   "taskId": "task-123",
   "contextId": "context-456",
   "rating": 80,
-  "domain": "movieassistant.localhost:12345",
+  "domain": "movieclient.localhost:12345",
   "notes": "Great movie recommendations!",
   "proofOfPayment": "0x...",
   "createdAt": "2024-01-01T00:00:00.000Z"
@@ -98,7 +98,7 @@ BUNDLER_URL=https://api.pimlico.io/v2/11155111/rpc?apikey=your_key
   "total": 10,
   "averageRating": 75.5,
   "byDomain": {
-    "movieassistant.localhost:12345": 8,
+    "movieclient.localhost:12345": 8,
     "other.domain.com": 2
   },
   "byRating": {
