@@ -9,6 +9,7 @@ echo "TMDB_API_KEY=..." >> ../../.env # v3 key
 # or use a v4 token instead of TMDB_API_KEY
 # echo "TMDB_API_TOKEN=ey..." >> ../../.env
 
+echo "127.0.0.1 movieagent.localhost" | sudo tee -a /etc/hosts
 npm run agents:movie-agent
 ```
 

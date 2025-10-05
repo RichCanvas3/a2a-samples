@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import OpenAI from "openai";
+import cors from "cors";
 
 import {
   AgentCard,
@@ -398,7 +399,14 @@ async function main() {
 
   // 4. Create and setup A2AExpressApp
   const appBuilder = new A2AExpressApp(requestHandler);
-  const expressApp = appBuilder.setupRoutes(express() as any);
+  const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://movieclient.localhost:3000')
+    .split(',')
+    .map(o => o.trim())
+    .filter(o => o.length > 0);
+
+  const app = express() as any;
+  app.use(cors({ origin: allowedOrigins }));
+  const expressApp = appBuilder.setupRoutes(app);
 
   // 4.5. Add static agent card endpoint
   
