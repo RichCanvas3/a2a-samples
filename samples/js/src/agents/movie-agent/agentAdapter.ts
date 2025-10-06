@@ -1,10 +1,10 @@
-import { createPublicClient, createWalletClient, custom, http, defineChain, encodeFunctionData, encodeAbiParameters, zeroAddress, toHex, type Address, type Chain, type PublicClient, type Account } from "viem";
+import { createPublicClient, createWalletClient, custom, http, defineChain, encodeFunctionData, encodeAbiParameters, keccak256, zeroAddress, toHex, type Address, type Chain, type PublicClient, type Account } from "viem";
 import { identityRegistryAbi } from "../../lib/abi/identityRegistry.js";
 import { reputationRegistryAbi } from "../../lib/abi/reputationRegistry.js";
 import { createBundlerClient, createPaymasterClient } from 'viem/account-abstraction';
 import { buildDelegationSetup } from './session.js';
 import { privateKeyToAccount } from 'viem/accounts';
-
+import { keccak256 } from 'viem';
 import {
     Implementation,
     toMetaMaskSmartAccount,
@@ -25,6 +25,7 @@ import { sepolia } from "viem/chains";
 import { getFeedbackDatabase, type FeedbackRecord } from './feedbackStorage.js';
 
 // -------------------- feedbackAuth helpers --------------------
+const FEEDBACK_DOMAIN = '0x7f8a2c3b4d9f3e0c1b0d1a29e5a2f6ac2a9f2a0c4c3a2b195e4c2aee2a9f7f60' as `0x${string}`;
 type FeedbackAuthPayload = {
   agentId: bigint;
   clientAddress: `0x${string}`;
@@ -80,15 +81,14 @@ function encodeFeedbackAuthPayload(payload: FeedbackAuthPayload): `0x${string}` 
 }
 
 async function signFeedbackAuthMessage(params: {
-  walletClient?: any;
   account: Account;
   message: `0x${string}`;
 }): Promise<`0x${string}`> {
-  if (params.walletClient?.signMessage) {
-    return await params.walletClient.signMessage({ account: params.account, message: { raw: params.message } });
+
+  if (params.account?.signMessage) {
+    console.info('*************** signFeedbackAuthMessage: params.account', params.account.address);
+    return await params.account.signMessage({ message: { raw: params.message } });
   }
-  // viem Account (local) signer
-  return await (params.account as any).signMessage({ message: { raw: params.message } });
 }
 
 export async function createFeedbackAuth(params: {
@@ -145,8 +145,36 @@ export async function createFeedbackAuth(params: {
     signerAddress: signer.address as `0x${string}`,
   };
 
-  const encodedPayload = encodeFeedbackAuthPayload(payload);
-  const signature = await signFeedbackAuthMessage({ walletClient, account: signer, message: encodedPayload });
+  // Build the domain-separated inner hash exactly as the contract does
+  const inner = keccak256(
+    encodeAbiParameters(
+      [
+        { type: 'bytes32' },  // FEEDBACK_DOMAIN
+        { type: 'uint64'  },  // chainId
+        { type: 'address' },  // reputationRegistry (address(this))
+        { type: 'address' },  // identityRegistry
+        { type: 'uint256' },  // agentId
+        { type: 'address' },  // clientAddress
+        { type: 'uint64'  },  // indexLimit
+        { type: 'uint64'  },  // expiry
+        { type: 'address' },  // signer
+      ],
+      [
+        FEEDBACK_DOMAIN,
+        BigInt(chainId),
+        reputationRegistry,
+        identityRegistry,
+        agentId,
+        clientAddress,
+        indexLimit,
+        expiry,
+        payload.signerAddress,
+      ],
+    ),
+  );
+
+  // Sign inner; the solidity code calls toEthSignedMessageHash(inner), which viem applies for signMessage
+  const signature = await signFeedbackAuthMessage({ account: signer, message: inner });
 
   const full = encodeAbiParameters(
     [
@@ -476,7 +504,13 @@ export async function giveFeedbackWithDelegation(params: {
   const { agentId, agentAccount } = params;
   const sp = buildDelegationSetup();
   console.info('*************** buildDelegationSetup: sp.signedDelegation:', JSON.stringify(sp.signedDelegation, null, 2));
-  const senderAA = (sp.sessionAA || sp.aa) as `0x${string}`;
+
+  const clientPrivateKey = (process.env.CLIENT_PRIVATE_KEY || '').trim() as `0x${string}`;
+  if (!clientPrivateKey || !clientPrivateKey.startsWith('0x')) {
+    throw new Error('CLIENT_PRIVATE_KEY not set or invalid. Please set a 0x-prefixed 32-byte hex in .env');
+  }
+  const clientAccount = privateKeyToAccount(clientPrivateKey);
+  const clientAddress = clientAccount.address as `0x${string}`;
 
   // Encode the target contract call
   const zeroBytes32 = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`;
@@ -492,8 +526,17 @@ export async function giveFeedbackWithDelegation(params: {
     const publicClient = createPublicClient({ chain: sepolia, transport: http(sp.rpcUrl) });
 
     // signer: agent owner/operator derived from session key
-    const owner = privateKeyToAccount(sp.sessionKey.privateKey);
-    const clientAddress = (sp.sessionAA || sp.aa) as `0x${string}`;
+    console.info('*************** createFeedbackAuth: sp.sessionAA', sp.sessionAA);
+    const owner = sp.sessionAA
+    const ownerEOA = privateKeyToAccount(sp.sessionKey.privateKey);
+
+    const signerSmartAccount = await toMetaMaskSmartAccount({
+      client: publicClient,
+      chain: sepolia,
+      implementation: Implementation.Hybrid,
+      address: sp.sessionAA as `0x${string}`,
+      signatory: { account: ownerEOA as any },
+    } as any);
 
     console.info('*************** createFeedbackAuth: owner', owner);
     console.info('*************** createFeedbackAuth: clientAddress', clientAddress);
@@ -505,13 +548,34 @@ export async function giveFeedbackWithDelegation(params: {
       reputationRegistry: sp.reputationRegistry as `0x${string}`,
       agentId,
       clientAddress,
-      signer: owner as unknown as Account,
+      signer: signerSmartAccount,
       // expirySeconds, indexLimitOverride can be passed via env if needed
       expirySeconds: Number(process.env.ERC8004_FEEDBACKAUTH_TTL_SEC || 3600),
     });
   }
   console.info('*************** createFeedbackAuth: feedbackAuth', feedbackAuth);
-  
+
+
+  // Simple EOA example: send direct tx from client EOA (from .env CLIENT_PRIVATE_KEY) to ReputationRegistry.giveFeedback
+
+  // construct wallet client bound to rpc; pass account explicitly to writeContract
+  const walletClient = createWalletClient({ chain: sepolia, transport: http(sp.rpcUrl) }) as any;
+  console.info('*************** call reputation registry giveFeedback');
+  const txHash = await walletClient.writeContract({
+    address: sp.reputationRegistry as `0x${string}`,
+    abi: reputationRegistryAbi,
+    functionName: 'giveFeedback',
+    args: [agentId, score, tag1, tag2, fileuri, filehash, feedbackAuth],
+    account: clientAccount,
+  });
+  console.info('*************** createFeedbackAuth: txHash', txHash);
+  const receiptClient = createPublicClient({ chain: sepolia, transport: http(sp.rpcUrl) });
+  const receipt = await receiptClient.waitForTransactionReceipt({ hash: txHash as `0x${string}` });
+  console.info('*************** createFeedbackAuth: receipt', receipt);
+  return txHash as `0x${string}`;
+
+  /*
+
   const callData = encodeFunctionData({
     abi: reputationRegistryAbi,
     functionName: 'giveFeedback',
@@ -561,6 +625,8 @@ export async function giveFeedbackWithDelegation(params: {
     } as any);
   }
 
+  console.info('*************** construct session account toMetaMaskSmartAccount: account', account);
+
 
 
   // data is guaranteed by encodeDelegationRedeem
@@ -577,6 +643,8 @@ export async function giveFeedbackWithDelegation(params: {
   console.info("*************** sendSponsoredUserOperation: userOpHash", userOpHash);
 
   return userOpHash as `0x${string}`;
+  */
+
 }
 
 
