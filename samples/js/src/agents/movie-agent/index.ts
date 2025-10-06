@@ -25,7 +25,7 @@ import {
   DefaultRequestHandler,
 } from "@a2a-js/sdk/server";
 import { openAiToolDefinitions, openAiToolHandlers } from "./tools.js";
-import { acceptFeedbackWithDelegation } from './agentAdapter.js';
+import { giveFeedbackWithDelegation } from './agentAdapter.js';
 
 if (!process.env.OPENAI_API_KEY || !process.env.TMDB_API_KEY) {
   console.error("OPENAI_API_KEY and TMDB_API_KEY environment variables are required")
@@ -373,15 +373,14 @@ const movieAgentCard: AgentCard = {
 };
 
 async function main() {
-  // Attempt to submit an acceptFeedback operation via delegation on startup
+  // Attempt to submit a giveFeedback operation via delegation on startup
   try {
-    console.info('***************  attempt to submit an acceptFeedback operation via delegation on startup')
-    const agentClientId = BigInt(process.env.AGENT_CLIENT_ID || '1');
-    const agentServerId = BigInt(process.env.AGENT_SERVER_ID || '4');
-    await acceptFeedbackWithDelegation({ agentClientId, agentServerId });
-    console.log(`[MovieAgent] acceptFeedbackWithDelegation submitted for clientId=${agentClientId}, serverId=${agentServerId}`);
+    console.info('***************  attempt to submit a giveFeedback operation via delegation on startup')
+    const agentId = BigInt(process.env.AGENT_SERVER_ID || '1');
+    await giveFeedbackWithDelegation({ agentId });
+    console.log(`[MovieAgent] giveFeedbackWithDelegation submitted for agentId=${agentId}`);
   } catch (err: any) {
-    console.warn('[MovieAgent] acceptFeedbackWithDelegation skipped:', err?.message || err);
+    console.warn('[MovieAgent] giveFeedbackWithDelegation skipped:', err?.message || err);
   }
 
   // 1. Create TaskStore
@@ -422,7 +421,7 @@ async function main() {
   });
 
   // 5. Start the server
-  const PORT = process.env.PORT || 41241;
+  const PORT = Number(process.env.PORT) || 41241;
   const HOST = process.env.HOST || 'movieagent.localhost';
   expressApp.listen(PORT, HOST, () => {
     console.log(`[MovieAgent] Server using new framework started on http://${HOST}:${PORT}`);

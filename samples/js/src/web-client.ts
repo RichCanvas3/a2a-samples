@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.WEB_CLIENT_PORT || 3001;
-const HOST = process.env.HOST || 'movieclient.localhost';
+const HOST = process.env.HOST || 'localhost';
 
 // Middleware
 app.use(express.json());

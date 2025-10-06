@@ -19,7 +19,7 @@ import {
   Part, // Added for explicit Part typing
 } from "@a2a-js/sdk";
 import { A2AClient } from "@a2a-js/sdk/client";
-import { getFeedbackAuthId, acceptFeedbackWithDelegation, addFeedback } from "./agents/movie-agent/agentAdapter.js";
+import { addFeedback } from "./agents/movie-agent/agentAdapter.js";
 import { getFeedbackDatabase } from "./agents/movie-agent/feedbackStorage.js";
 
 // --- ANSI Colors ---
@@ -251,21 +251,7 @@ async function main() {
       }
       
       try {
-        const clientAgentId = BigInt(parts[1]);
-        const serverAgentId = BigInt(parts[2]);
         
-        console.log(colorize("yellow", `Getting feedback auth ID for client=${clientAgentId}, server=${serverAgentId}...`));
-        
-        const feedbackAuthId = await getFeedbackAuthId({
-          clientAgentId,
-          serverAgentId
-        });
-        
-        if (feedbackAuthId) {
-          console.log(colorize("green", `Feedback Auth ID: ${feedbackAuthId}`));
-        } else {
-          console.log(colorize("yellow", "No feedback auth ID found (null or zero result)"));
-        }
       } catch (error: any) {
         console.log(colorize("red", `Error: ${error?.message || error}`));
       }
@@ -284,15 +270,7 @@ async function main() {
       }
       
       try {
-        const clientAgentId = BigInt(parts[1]);
-        const serverAgentId = BigInt(parts[2]);
-        
-        console.log(colorize("yellow", `Accepting feedback for client=${clientAgentId}, server=${serverAgentId}...`));
-        
-        const userOpHash = await acceptFeedbackWithDelegation({
-          agentClientId: clientAgentId,
-          agentServerId: serverAgentId
-        });
+
         
         console.log(colorize("green", `Feedback accepted! UserOp Hash: ${userOpHash}`));
       } catch (error: any) {

@@ -556,12 +556,14 @@
 
         // Check movie agent status
         async function checkAgentStatus() {
+            console.log('Checking agent status');
             const statusEl = document.getElementById('agentStatus');
             statusEl.innerHTML = '<div class="loading">Checking agent connection...</div>';
             
             try {
                 const response = await fetch('/api/movie-agent/status');
                 const result = await response.json();
+                console.info('Agent status:', result);
                 
                 if (result.status === 'connected') {
                     statusEl.innerHTML = `

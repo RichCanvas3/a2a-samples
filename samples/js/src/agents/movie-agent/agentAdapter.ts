@@ -1,5 +1,6 @@
-import { createPublicClient, createWalletClient, custom, http, defineChain, encodeFunctionData, zeroAddress, toHex, type Address, type Chain, type PublicClient } from "viem";
+import { createPublicClient, createWalletClient, custom, http, defineChain, encodeFunctionData, encodeAbiParameters, zeroAddress, toHex, type Address, type Chain, type PublicClient, type Account } from "viem";
 import { identityRegistryAbi } from "../../lib/abi/identityRegistry.js";
+import { reputationRegistryAbi } from "../../lib/abi/reputationRegistry.js";
 import { createBundlerClient, createPaymasterClient } from 'viem/account-abstraction';
 import { buildDelegationSetup } from './session.js';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -22,6 +23,159 @@ import {
   } from "@metamask/delegation-toolkit";
 import { sepolia } from "viem/chains";
 import { getFeedbackDatabase, type FeedbackRecord } from './feedbackStorage.js';
+
+// -------------------- feedbackAuth helpers --------------------
+type FeedbackAuthPayload = {
+  agentId: bigint;
+  clientAddress: `0x${string}`;
+  indexLimit: bigint;     // uint64
+  expiry: bigint;         // uint64
+  chainId: bigint;        // uint256
+  identityRegistry: `0x${string}`;
+  signerAddress: `0x${string}`;
+};
+
+async function fetchIdentityRegistry(publicClient: PublicClient, reputationRegistry: `0x${string}`): Promise<`0x${string}`> {
+  return await publicClient.readContract({
+    address: reputationRegistry,
+    abi: reputationRegistryAbi,
+    functionName: 'getIdentityRegistry',
+    args: [],
+  }) as `0x${string}`;
+}
+
+async function fetchLastIndex(publicClient: PublicClient, reputationRegistry: `0x${string}`, agentId: bigint, clientAddress: `0x${string}`): Promise<bigint> {
+  return await publicClient.readContract({
+    address: reputationRegistry,
+    abi: reputationRegistryAbi,
+    functionName: 'getLastIndex',
+    args: [agentId, clientAddress],
+  }) as bigint;
+}
+
+function encodeFeedbackAuthPayload(payload: FeedbackAuthPayload): `0x${string}` {
+  return encodeAbiParameters(
+    [{
+      type: 'tuple',
+      components: [
+        { name: 'agentId',          type: 'uint256' },
+        { name: 'clientAddress',    type: 'address' },
+        { name: 'indexLimit',       type: 'uint64'  },
+        { name: 'expiry',           type: 'uint64'  },
+        { name: 'chainId',          type: 'uint256' },
+        { name: 'identityRegistry', type: 'address' },
+        { name: 'signerAddress',    type: 'address' },
+      ],
+    }],
+    ([[
+      payload.agentId,
+      payload.clientAddress,
+      payload.indexLimit,
+      payload.expiry,
+      payload.chainId,
+      payload.identityRegistry,
+      payload.signerAddress,
+    ]] as any),
+  ) as `0x${string}`;
+}
+
+async function signFeedbackAuthMessage(params: {
+  walletClient?: any;
+  account: Account;
+  message: `0x${string}`;
+}): Promise<`0x${string}`> {
+  if (params.walletClient?.signMessage) {
+    return await params.walletClient.signMessage({ account: params.account, message: { raw: params.message } });
+  }
+  // viem Account (local) signer
+  return await (params.account as any).signMessage({ message: { raw: params.message } });
+}
+
+export async function createFeedbackAuth(params: {
+  publicClient: PublicClient;
+  reputationRegistry: `0x${string}`;
+  agentId: bigint;
+  clientAddress: `0x${string}`;
+  signer: Account;
+  walletClient?: any;
+  indexLimitOverride?: bigint;
+  expirySeconds?: number;
+  identityRegistryOverride?: `0x${string}`;
+  chainIdOverride?: bigint;
+}): Promise<`0x${string}`> {
+  const {
+    publicClient,
+    reputationRegistry,
+    agentId,
+    clientAddress,
+    signer,
+    walletClient,
+    indexLimitOverride,
+    expirySeconds = 3600,
+    identityRegistryOverride,
+    chainIdOverride,
+  } = params;
+
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  const chainId = chainIdOverride ?? BigInt(publicClient.chain?.id ?? 0);
+  const identityRegistry = identityRegistryOverride ?? await fetchIdentityRegistry(publicClient, reputationRegistry);
+  const U64_MAX = 18446744073709551615n;
+  const lastIndexFetched = indexLimitOverride !== undefined
+    ? (indexLimitOverride - 1n)
+    : await fetchLastIndex(publicClient, reputationRegistry, agentId, clientAddress);
+  const lastIndex = lastIndexFetched > U64_MAX ? U64_MAX : lastIndexFetched;
+  let indexLimit = indexLimitOverride ?? (lastIndex + 1n);
+  if (indexLimit > U64_MAX) {
+    console.warn('[FeedbackAuth] Computed indexLimit exceeds uint64; clamping to max');
+    indexLimit = U64_MAX;
+  }
+  let expiry = nowSec + BigInt(expirySeconds);
+  if (expiry > U64_MAX) {
+    console.warn('[FeedbackAuth] Computed expiry exceeds uint64; clamping to max');
+    expiry = U64_MAX;
+  }
+
+  const payload: FeedbackAuthPayload = {
+    agentId,
+    clientAddress,
+    indexLimit,
+    expiry,
+    chainId,
+    identityRegistry,
+    signerAddress: signer.address as `0x${string}`,
+  };
+
+  const encodedPayload = encodeFeedbackAuthPayload(payload);
+  const signature = await signFeedbackAuthMessage({ walletClient, account: signer, message: encodedPayload });
+
+  const full = encodeAbiParameters(
+    [
+      {
+        type: 'tuple',
+        components: [
+          { name: 'agentId',          type: 'uint256' },
+          { name: 'clientAddress',    type: 'address' },
+          { name: 'indexLimit',       type: 'uint64'  },
+          { name: 'expiry',           type: 'uint64'  },
+          { name: 'chainId',          type: 'uint256' },
+          { name: 'identityRegistry', type: 'address' },
+          { name: 'signerAddress',    type: 'address' },
+        ],
+      },
+      { type: 'bytes' },
+    ],
+    ([[
+      payload.agentId,
+      payload.clientAddress,
+      payload.indexLimit,
+      payload.expiry,
+      payload.chainId,
+      payload.identityRegistry,
+      payload.signerAddress,
+    ], signature] as any),
+  );
+  return full as `0x${string}`;
+}
 
 export type AgentInfo = {
   agentId: bigint;
@@ -155,50 +309,6 @@ export function createAgentAdapter(config: AgentAdapterConfig) {
   };
 }
 
-// -------------------- AA helpers for Identity Registration (per user spec) --------------------
-
-export const identityRegistrationAbi = [
-  {
-    type: 'function',
-    name: 'newAgent',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'domain', type: 'string' },
-      { name: 'agentAccount', type: 'address' },
-    ],
-    outputs: [
-      { name: 'agentId', type: 'uint256' },
-    ],
-  },
-  {
-    type: 'function',
-    name: 'resolveByDomain',
-    stateMutability: 'view',
-    inputs: [{ name: 'agentDomain', type: 'string' }],
-    outputs: [
-      {
-        name: 'agentInfo',
-        type: 'tuple',
-        components: [
-          { name: 'agentId', type: 'uint256' },
-          { name: 'agentDomain', type: 'string' },
-          { name: 'agentAddress', type: 'address' },
-        ],
-      },
-    ],
-  },
-  { type: 'function', name: 'agentOfDomain', stateMutability: 'view', inputs: [{ name: 'domain', type: 'string' }], outputs: [{ name: 'agent', type: 'address' }] },
-  { type: 'function', name: 'getAgent', stateMutability: 'view', inputs: [{ name: 'domain', type: 'string' }], outputs: [{ name: 'agent', type: 'address' }] },
-  { type: 'function', name: 'agents', stateMutability: 'view', inputs: [{ name: 'domain', type: 'string' }], outputs: [{ name: 'agent', type: 'address' }] },
-] as const;
-
-export function encodeNewAgent(domain: string, agentAccount: `0x${string}`): `0x${string}` {
-  return encodeFunctionData({
-    abi: identityRegistrationAbi,
-    functionName: 'newAgent',
-    args: [domain, agentAccount],
-  });
-}
 
 export async function getAgentByDomain(params: {
   publicClient: PublicClient,
@@ -209,14 +319,14 @@ export async function getAgentByDomain(params: {
   const domain = params.domain.trim().toLowerCase();
   const zero = '0x0000000000000000000000000000000000000000';
   try {
-    const info: any = await publicClient.readContract({ address: registry, abi: identityRegistrationAbi as any, functionName: 'resolveByDomain' as any, args: [domain] });
+    const info: any = await publicClient.readContract({ address: registry, abi: identityRegistryAbi as any, functionName: 'resolveByDomain' as any, args: [domain] });
     const addr = (info?.agentAddress ?? info?.[2]) as `0x${string}` | undefined;
     if (addr && addr !== zero) return addr;
   } catch {}
   const fns: Array<'agentOfDomain' | 'getAgent' | 'agents'> = ['agentOfDomain', 'getAgent', 'agents'];
   for (const fn of fns) {
     try {
-      const addr = await publicClient.readContract({ address: registry, abi: identityRegistrationAbi as any, functionName: fn as any, args: [domain] }) as `0x${string}`;
+      const addr = await publicClient.readContract({ address: registry, abi: identityRegistryAbi as any, functionName: fn as any, args: [domain] }) as `0x${string}`;
       if (addr && addr !== zero) return addr;
     } catch {}
   }
@@ -233,7 +343,7 @@ export async function getAgentInfoByDomain(params: {
   try {
     const info: any = await publicClient.readContract({
       address: registry,
-      abi: identityRegistrationAbi as any,
+      abi: identityRegistryAbi as any,
       functionName: 'resolveByDomain' as any,
       args: [domain],
     });
@@ -311,56 +421,10 @@ export async function sendSponsoredUserOperation(params: {
   return userOpHash as `0x${string}`;
 }
 
-export async function ensureIdentityWithAA(params: {
-  publicClient: PublicClient,
-  bundlerUrl: string,
-  chain: Chain,
-  registry: `0x${string}`,
-  domain: string,
-  agentAccount: any,
-}): Promise<`0x${string}`> {
-  const { publicClient, bundlerUrl, chain, registry, domain, agentAccount } = params;
-  const existing = await getAgentByDomain({ publicClient, registry, domain });
-  console.info('********************* ensureIdentityWithAA: existing', existing);
-  if (existing) return existing;
 
-  console.log('********************* deploySmartAccountIfNeeded');
-  await deploySmartAccountIfNeeded({ bundlerUrl, chain, account: agentAccount });
-  const agentAddress = await agentAccount.getAddress();
-  const data = encodeNewAgent(domain.trim().toLowerCase(), agentAddress as `0x${string}`);
-  await sendSponsoredUserOperation({ bundlerUrl, chain, account: agentAccount, calls: [{ to: registry, data, value: 0n }] });
-  console.info("*************** getAgentByDomain ********");
-  const updated = await getAgentByDomain({ publicClient, registry, domain });
-  console.log('********************* ensureIdentityWithAA: updated', updated);
-  return (updated ?? agentAddress) as `0x${string}`;
-}
+// -------------------- Reputation Registry (ERC-8004-like) via Delegation Toolkit --------------------
 
-// -------------------- Reputation Registry (acceptFeedback) via Delegation Toolkit --------------------
 
-export const reputationRegistryAbi = [
-  {
-    type: 'function',
-    name: 'acceptFeedback',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'agentClientId', type: 'uint256' },
-      { name: 'agentServerId', type: 'uint256' },
-    ],
-    outputs: [],
-  },
-  {
-    type: 'function',
-    name: 'getFeedbackAuthId',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'clientAgentId', type: 'uint256' },
-      { name: 'serverAgentId', type: 'uint256' },
-    ],
-    outputs: [
-      { name: 'feedbackAuthId', type: 'bytes32' },
-    ],
-  },
-] as const;
 
 async function encodeDelegationRedeem(params: {
   delegationChain: any[];
@@ -399,21 +463,59 @@ async function encodeDelegationRedeem(params: {
   return data;
 }
 
-export async function acceptFeedbackWithDelegation(params: {
-  agentClientId: bigint;
-  agentServerId: bigint;
+export async function giveFeedbackWithDelegation(params: {
+  agentId: bigint;
+  score?: number; // 0..100
+  tag1?: `0x${string}`; // bytes32
+  tag2?: `0x${string}`; // bytes32
+  fileuri?: string;
+  filehash?: `0x${string}`; // bytes32
+  feedbackAuth?: `0x${string}`; // bytes
   agentAccount?: any; // Smart account configured for the session key
 }): Promise<`0x${string}`> {
-  const { agentClientId, agentServerId, agentAccount } = params;
+  const { agentId, agentAccount } = params;
   const sp = buildDelegationSetup();
   console.info('*************** buildDelegationSetup: sp.signedDelegation:', JSON.stringify(sp.signedDelegation, null, 2));
   const senderAA = (sp.sessionAA || sp.aa) as `0x${string}`;
 
   // Encode the target contract call
+  const zeroBytes32 = '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`;
+  const score = typeof params.score === 'number' ? Math.max(0, Math.min(100, Math.floor(params.score))) : 80;
+  const tag1 = params.tag1 || zeroBytes32;
+  const tag2 = params.tag2 || zeroBytes32;
+  const fileuri = params.fileuri || '';
+  const filehash = params.filehash || zeroBytes32;
+
+  // If feedbackAuth not provided, build and sign it (EIP-191 / ERC-1271 verification on-chain)
+  let feedbackAuth = (params.feedbackAuth || '0x') as `0x${string}`;
+  if (!params.feedbackAuth || params.feedbackAuth === '0x') {
+    const publicClient = createPublicClient({ chain: sepolia, transport: http(sp.rpcUrl) });
+
+    // signer: agent owner/operator derived from session key
+    const owner = privateKeyToAccount(sp.sessionKey.privateKey);
+    const clientAddress = (sp.sessionAA || sp.aa) as `0x${string}`;
+
+    console.info('*************** createFeedbackAuth: owner', owner);
+    console.info('*************** createFeedbackAuth: clientAddress', clientAddress);
+    console.info('*************** createFeedbackAuth: sp.reputationRegistry', sp.reputationRegistry);
+    console.info('*************** createFeedbackAuth: agentId', agentId);
+    console.info('*************** createFeedbackAuth: expirySeconds', Number(process.env.ERC8004_FEEDBACKAUTH_TTL_SEC || 3600));
+    feedbackAuth = await createFeedbackAuth({
+      publicClient,
+      reputationRegistry: sp.reputationRegistry as `0x${string}`,
+      agentId,
+      clientAddress,
+      signer: owner as unknown as Account,
+      // expirySeconds, indexLimitOverride can be passed via env if needed
+      expirySeconds: Number(process.env.ERC8004_FEEDBACKAUTH_TTL_SEC || 3600),
+    });
+  }
+  console.info('*************** createFeedbackAuth: feedbackAuth', feedbackAuth);
+  
   const callData = encodeFunctionData({
     abi: reputationRegistryAbi,
-    functionName: 'acceptFeedback',
-    args: [agentClientId, agentServerId],
+    functionName: 'giveFeedback',
+    args: [agentId, score, tag1, tag2, fileuri, filehash, feedbackAuth],
   });
 
   const execution = {
@@ -477,66 +579,6 @@ export async function acceptFeedbackWithDelegation(params: {
   return userOpHash as `0x${string}`;
 }
 
-export async function getFeedbackAuthId(params: {
-  clientAgentId: bigint;
-  serverAgentId: bigint;
-  publicClient?: PublicClient;
-  reputationRegistry?: `0x${string}`;
-}): Promise<string | null> {
-  const { clientAgentId, serverAgentId } = params;
-  
-  const sp = buildDelegationSetup();
-  
-  // Use a more reliable Sepolia RPC URL
-
-  const publicClient = createPublicClient({
-    chain: sepolia,
-    transport: http(process.env.RPC_URL),
-  });
-
-  let reputationRegistry = params.reputationRegistry;
-  
-  if (!reputationRegistry) {
-    reputationRegistry = reputationRegistry || sp.reputationRegistry as `0x${string}`;
-  }
-
-  try {
-    console.info('ERC-8004: getFeedbackAuthId(client=%s, server=%s)', clientAgentId.toString(), serverAgentId.toString());
-    console.info('ERC-8004: reputationRegistry', reputationRegistry);
-
-    
-    // Test RPC connection first
-    console.info('ERC-8004: Testing RPC connection...');
-    const blockNumber = await publicClient.getBlockNumber();
-    console.info('ERC-8004: RPC connection OK, block number:', blockNumber.toString());
-    
-    // Add timeout to prevent hanging
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Contract call timeout after 10 seconds')), 10000);
-    });
-    
-    const contractPromise = publicClient.readContract({
-      address: reputationRegistry,
-      abi: reputationRegistryAbi,
-      functionName: 'getFeedbackAuthId',
-      args: [clientAgentId, serverAgentId],
-    }) as Promise<`0x${string}`>;
-    
-    console.info('ERC-8004: Making contract call...');
-    const result = await Promise.race([contractPromise, timeoutPromise]);
-
-    if (!result || result === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-      console.info('ERC-8004: getFeedbackAuthId -> null (zero result)');
-      return null;
-    }
-
-    console.info('ERC-8004: getFeedbackAuthId -> %s', result);
-    return result;
-  } catch (error: any) {
-    console.info('ERC-8004: get_feedback_auth_id view failed: %s', error?.message || error);
-    return null;
-  }
-}
 
 export async function addFeedback(params: {
   agentId?: bigint;
@@ -568,48 +610,7 @@ export async function addFeedback(params: {
     // Get chain ID from environment or default to Sepolia
     const chainId = process.env.ERC8004_CHAIN_ID || '11155111';
     
-    let finalFeedbackAuthId = feedbackAuthId;
-    
-    // Try to get feedback auth ID if not provided
-    if (!finalFeedbackAuthId) {
-      console.info('ERC-8004: No feedback auth ID provided, attempting to retrieve from contract...');
-      
-      try {
-        // Get client and server agent IDs from environment or use defaults
-        const clientAgentId = BigInt(process.env.AGENT_CLIENT_ID || '12');
-        const serverAgentId = BigInt(process.env.AGENT_SERVER_ID || '11');
-        
-        console.info('ERC-8004: Attempting to get feedback auth ID for client=%s, server=%s', clientAgentId.toString(), serverAgentId.toString());
-        
-        // Call the actual getFeedbackAuthId function
-        console.info('ERC-8004: Calling getFeedbackAuthId...');
-        const authId = await getFeedbackAuthId({
-          clientAgentId,
-          serverAgentId
-        });
-        
-        console.info('ERC-8004: getFeedbackAuthId returned:', authId, '(type:', typeof authId, ')');
-        
-        if (authId && authId !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
-          finalFeedbackAuthId = authId;
-          console.info('ERC-8004: Retrieved valid feedback auth ID:', finalFeedbackAuthId);
-        } else {
-          // Fallback to CAIP-10 format if no auth ID found
-          const clientAddress = '0x0000000000000000000000000000000000000000'; // Placeholder
-          finalFeedbackAuthId = `eip155:${chainId}:${clientAddress}`;
-          console.info('ERC-8004: No valid auth ID found (got:', authId, '), using fallback:', finalFeedbackAuthId);
-        }
-      } catch (error: any) {
-        console.error('ERC-8004: Exception in getFeedbackAuthId:', error);
-        console.info('ERC-8004: Failed to get feedback auth ID:', error?.message || error);
-        // Fallback to CAIP-10 format
-        const clientAddress = '0x0000000000000000000000000000000000000000';
-        finalFeedbackAuthId = `eip155:${chainId}:${clientAddress}`;
-        console.info('ERC-8004: Using fallback feedback auth ID:', finalFeedbackAuthId);
-      }
-    } else {
-      console.info('ERC-8004: Using provided feedback auth ID:', finalFeedbackAuthId);
-    }
+    const finalFeedbackAuthId = feedbackAuthId || '';
     
     // Determine agent skill ID
     const agentSkillId = isReserve ? 'reserve:v1' : 'finder:v1';
